@@ -1340,6 +1340,139 @@ def sync_site(
 
 
 # ---------------------------------------------------------------------------
+# Person Integrity Auditor
+# ---------------------------------------------------------------------------
+
+
+@cli.command("audit-persons")
+@click.option("--phases", "-p", default="all",
+              help="Comma-separated phases: dedup,wikidata,factcheck,coherence,score (default: all)")
+@click.option("--person", help="Single person slug to audit")
+@click.option("--limit", "-l", type=int, default=None, help="Max persons to audit")
+@click.option("--resume/--no-resume", default=True, help="Resume from last checkpoint")
+@click.option("--dry-run", is_flag=True, help="Preview issues without storing to DB")
+@click.option("--output", "-o", type=click.Path(path_type=Path), default=None,
+              help="Write JSON report to file")
+@click.option("--min-severity", type=int, default=0, help="Only report issues >= this severity")
+def audit_persons(
+    phases: str,
+    person: str | None,
+    limit: int | None,
+    resume: bool,
+    dry_run: bool,
+    output: Path | None,
+    min_severity: int,
+) -> None:
+    """Audit person records for data quality issues.
+
+    \b
+    5-phase pipeline:
+      1. dedup     — detect duplicate/merged entries (rapidfuzz)
+      2. wikidata  — cross-reference Wikidata + Wikipedia
+      3. factcheck — decompose bios, verify against documents (Claude)
+      4. coherence — detect merged identities via document sampling
+      5. score     — calculate severity, create ai_leads
+
+    \b
+    Examples:
+      epstein-pipeline audit-persons
+      epstein-pipeline audit-persons --phases dedup,wikidata --limit 50
+      epstein-pipeline audit-persons --person jeffrey-epstein --dry-run
+      epstein-pipeline audit-persons --min-severity 40 -o report.json
+    """
+    import asyncio
+
+    settings = _load_settings()
+
+    if not settings.neon_database_url:
+        console.print("[red]Error: EPSTEIN_NEON_DATABASE_URL required[/red]")
+        raise SystemExit(1)
+
+    if not settings.auditor_anthropic_api_key:
+        console.print("[red]Error: EPSTEIN_AUDITOR_ANTHROPIC_API_KEY required[/red]")
+        raise SystemExit(1)
+
+    phase_list = None if phases == "all" else [p.strip() for p in phases.split(",")]
+
+    # Resolve person slug to ID if needed
+    person_ids = None
+    if person:
+        from epstein_pipeline.processors.person_auditor import PersonIntegrityAuditor
+        auditor = PersonIntegrityAuditor(settings)
+        persons = auditor._fetch_persons(None, None)
+        matched = [p for p in persons if p["slug"] == person]
+        if not matched:
+            console.print(f"[red]Person not found: {person}[/red]")
+            raise SystemExit(1)
+        person_ids = [matched[0]["id"]]
+        auditor.close()
+
+    console.print(BANNER)
+    console.print(f"[bold]Person Integrity Audit[/bold]")
+    console.print(f"  Phases: {phases}")
+    if person:
+        console.print(f"  Person: {person}")
+    if limit:
+        console.print(f"  Limit: {limit}")
+    console.print(f"  Resume: {resume}")
+    console.print(f"  Dry run: {dry_run}")
+    console.print()
+
+    from epstein_pipeline.processors.person_auditor import PersonIntegrityAuditor
+
+    auditor = PersonIntegrityAuditor(settings)
+    try:
+        summary = asyncio.run(auditor.run(
+            phases=phase_list,
+            person_ids=person_ids,
+            limit=limit,
+            resume=resume,
+            dry_run=dry_run,
+            min_severity=min_severity,
+        ))
+    finally:
+        auditor.close()
+
+    # Display results
+    table = Table(title="Audit Summary")
+    table.add_column("Metric", style="bold")
+    table.add_column("Value", justify="right")
+    table.add_row("Persons Scanned", str(summary.persons_scanned))
+    table.add_row("Issues Found", str(summary.issues_found))
+    table.add_row("[red]Critical (70+)[/red]", str(summary.critical_count))
+    table.add_row("[yellow]High (40-69)[/yellow]", str(summary.high_count))
+    table.add_row("Medium (20-39)", str(summary.medium_count))
+    table.add_row("[dim]Low (<20)[/dim]", str(summary.low_count))
+    table.add_row("Cost", f"${summary.total_cost_cents / 100:.2f}")
+    table.add_row("Phases", ", ".join(summary.phases_completed))
+    console.print(table)
+
+    # Show top issues
+    all_issues = sorted(
+        [i for r in summary.results for i in r.issues],
+        key=lambda x: x.severity,
+        reverse=True,
+    )
+    if all_issues:
+        console.print(f"\n[bold]Top Issues:[/bold]")
+        for issue in all_issues[:20]:
+            sev_color = "red" if issue.severity >= 70 else "yellow" if issue.severity >= 40 else "white"
+            console.print(
+                f"  [{sev_color}]{issue.severity:3d}[/{sev_color}] "
+                f"[bold]{issue.person_name}[/bold] — {issue.title}"
+            )
+
+    # Write JSON report
+    if output:
+        out_path = output
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        report = summary.model_dump()
+        report["issues"] = [i.model_dump() for i in all_issues]
+        out_path.write_text(json.dumps(report, indent=2, default=str), encoding="utf-8")
+        console.print(f"\n[green]Report written to {out_path}[/green]")
+
+
+# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 

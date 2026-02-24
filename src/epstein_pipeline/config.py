@@ -119,6 +119,23 @@ class Settings(BaseSettings):
     # ── Transcription ────────────────────────────────────────────────────
     whisper_model: str = "large-v3"
 
+    # ── Person Auditor settings ────────────────────────────────────────
+    auditor_anthropic_api_key: str | None = None
+    auditor_anthropic_model: str = "claude-sonnet-4-6"  # Primary model for verification
+    auditor_fast_model: str = "claude-haiku-4-5-20251001"  # Quick screening/decomposition
+    auditor_deep_model: str = "claude-sonnet-4-6"  # Deep analysis of flagged records
+    auditor_voyage_api_key: str | None = None
+    auditor_cohere_api_key: str | None = None
+    auditor_use_batch_api: bool = True
+    auditor_dedup_threshold: float = 0.85
+    auditor_name_fuzzy_threshold: int = 85
+    auditor_wikidata_rate_limit: float = 1.0  # seconds between requests
+    auditor_max_claims_per_person: int = 10
+    auditor_max_doc_chunks: int = 5
+    auditor_severity_critical: int = 70
+    auditor_severity_high: int = 40
+    auditor_severity_medium: int = 20
+
     def ensure_dirs(self) -> None:
         """Create data, output, and cache directories if they don't exist."""
         self.data_dir.mkdir(parents=True, exist_ok=True)

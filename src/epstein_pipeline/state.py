@@ -12,7 +12,10 @@ import sqlite3
 import time
 from pathlib import Path
 
-STAGES = ("ocr", "entities", "redaction", "images", "transcription", "dedup", "graph")
+STAGES = (
+    "ocr", "entities", "redaction", "images", "transcription", "dedup", "graph",
+    "audit_dedup", "audit_wikidata", "audit_factcheck", "audit_coherence", "audit_score",
+)
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS processing_state (
