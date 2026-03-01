@@ -1344,6 +1344,78 @@ def sync_site(
 # ---------------------------------------------------------------------------
 
 
+@cli.command("check-sanctions")
+@click.option("--output", "-o", type=click.Path(path_type=Path), default=None,
+              help="Output directory for results JSON (default: output/sanctions/)")
+@click.option("--api-key", envvar="EPSTEIN_OPENSANCTIONS_API_KEY", default=None,
+              help="OpenSanctions API key (or set EPSTEIN_OPENSANCTIONS_API_KEY)")
+@click.option("--registry", type=click.Path(exists=True, path_type=Path), default=None,
+              help="Path to persons-registry.json")
+@click.option("--threshold", type=float, default=0.5,
+              help="Minimum match score (0-1, default 0.5)")
+@click.option("--use-match/--use-search", default=True,
+              help="Use /match API (better quality) or /search (faster)")
+def check_sanctions(
+    output: Path | None,
+    api_key: str | None,
+    registry: Path | None,
+    threshold: float,
+    use_match: bool,
+) -> None:
+    """Cross-reference all persons against OpenSanctions.
+
+    Checks every person in the registry against OFAC SDN, EU sanctions,
+    UN Security Council, Interpol, PEP lists, and 100+ other datasets.
+
+    \b
+    Examples:
+      epstein-pipeline check-sanctions
+      epstein-pipeline check-sanctions --threshold 0.3 --use-search
+      epstein-pipeline check-sanctions --api-key YOUR_KEY -o ./sanctions/
+    """
+    settings = _load_settings()
+    key = api_key or settings.opensanctions_api_key
+    if not key:
+        console.print("[red]OpenSanctions API key required.[/red]")
+        console.print("Set EPSTEIN_OPENSANCTIONS_API_KEY or use --api-key")
+        raise SystemExit(1)
+
+    out_dir = output or settings.output_dir / "sanctions"
+    reg_path = registry or settings.persons_registry_path
+
+    from epstein_pipeline.downloaders.opensanctions import download_opensanctions
+
+    download_opensanctions(
+        out_dir,
+        api_key=key,
+        persons_registry_path=reg_path,
+        match_threshold=threshold,
+        use_match_api=use_match,
+    )
+
+
+@cli.command("import-sanctions")
+@click.argument("results_path", type=click.Path(exists=True, path_type=Path))
+@click.option("--database-url", envvar="EPSTEIN_NEON_DATABASE_URL", required=True,
+              help="Neon Postgres URL")
+@click.option("--min-score", type=float, default=0.4,
+              help="Minimum match score to import (default 0.4)")
+def import_sanctions(results_path: Path, database_url: str, min_score: float) -> None:
+    """Import OpenSanctions results into Neon Postgres.
+
+    Reads opensanctions-results.json and writes sanctions flags,
+    PEP status, and match data to the database.
+
+    \b
+    Examples:
+      epstein-pipeline import-sanctions ./output/sanctions/opensanctions-results.json
+      epstein-pipeline import-sanctions results.json --min-score 0.3
+    """
+    from epstein_pipeline.importers.opensanctions import import_opensanctions
+
+    import_opensanctions(results_path, database_url, min_score=min_score)
+
+
 @cli.command("audit-persons")
 @click.option("--phases", "-p", default="all",
               help="Comma-separated phases: dedup,wikidata,factcheck,coherence,score (default: all)")

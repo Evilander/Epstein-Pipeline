@@ -119,6 +119,10 @@ class Settings(BaseSettings):
     # ── Transcription ────────────────────────────────────────────────────
     whisper_model: str = "large-v3"
 
+    # ── OpenSanctions settings ──────────────────────────────────────────
+    opensanctions_api_key: str | None = None
+    opensanctions_match_threshold: float = 0.5  # minimum score to flag
+
     # ── Person Auditor settings ────────────────────────────────────────
     auditor_anthropic_api_key: str | None = None
     auditor_anthropic_model: str = "claude-sonnet-4-6"  # Primary model for verification
