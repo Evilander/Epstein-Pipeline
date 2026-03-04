@@ -147,7 +147,7 @@ class PersonIntegrityAuditor:
         if self._http is None:
             self._http = httpx.Client(
                 timeout=30.0,
-                headers={"User-Agent": "EpsteinPipeline/1.0 (contact@epsteinexposed.com)"},
+                headers={"User-Agent": "EpsteinPipeline/1.0 (j.tyler.eveland@gmail.com)"},
             )
         return self._http
 

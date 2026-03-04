@@ -4,7 +4,7 @@ Thank you for your interest in contributing to this public interest research pro
 
 ## Quick Links
 
-- [Open an Issue](https://github.com/stonesalltheway1/Epstein-Pipeline/issues/new/choose)
+- [Open an Issue](https://github.com/evilander/Epstein-Pipeline/issues/new/choose)
 - [Project Architecture](docs/ARCHITECTURE.md)
 - [Data Sources](docs/DATA_SOURCES.md)
 - [Processor Reference](docs/PROCESSORS.md)
@@ -17,9 +17,9 @@ Thank you for your interest in contributing to this public interest research pro
 
 | Contribution | How |
 |---|---|
-| **Report data quality issues** | Found a wrong person match, misclassified document, or bad OCR? [Open an issue](https://github.com/stonesalltheway1/Epstein-Pipeline/issues/new?template=bug-report.md). |
-| **Suggest new data sources** | Know of a public dataset we're missing? [Use the data source template](https://github.com/stonesalltheway1/Epstein-Pipeline/issues/new?template=new-data-source.md). |
-| **Person corrections** | Wrong name spelling, missing aliases, or incorrect person linking? [Use the person correction template](https://github.com/stonesalltheway1/Epstein-Pipeline/issues/new?template=person-correction.md). |
+| **Report data quality issues** | Found a wrong person match, misclassified document, or bad OCR? [Open an issue](https://github.com/evilander/Epstein-Pipeline/issues/new?template=bug-report.md). |
+| **Suggest new data sources** | Know of a public dataset we're missing? [Use the data source template](https://github.com/evilander/Epstein-Pipeline/issues/new?template=new-data-source.md). |
+| **Person corrections** | Wrong name spelling, missing aliases, or incorrect person linking? [Use the person correction template](https://github.com/evilander/Epstein-Pipeline/issues/new?template=person-correction.md). |
 | **Review processed data** | Check `data/known-duplicates.json` and verify dedup decisions are correct. |
 | **Improve documentation** | Fix typos, clarify instructions, add examples, translate docs. |
 
@@ -250,8 +250,8 @@ Epstein-Pipeline/
 
 ## Getting Help
 
-- **Questions:** Open a [Discussion](https://github.com/stonesalltheway1/Epstein-Pipeline/discussions) or ask in an issue
-- **Bugs:** Use the [bug report template](https://github.com/stonesalltheway1/Epstein-Pipeline/issues/new?template=bug-report.md)
+- **Questions:** Open a [Discussion](https://github.com/evilander/Epstein-Pipeline/discussions) or ask in an issue
+- **Bugs:** Use the [bug report template](https://github.com/evilander/Epstein-Pipeline/issues/new?template=bug-report.md)
 - **Live site issues:** Report at [epsteinexposed.com/contribute](https://epsteinexposed.com/contribute)
 
 ## License

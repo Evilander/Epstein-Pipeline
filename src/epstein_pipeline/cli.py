@@ -15,8 +15,8 @@ from epstein_pipeline.config import Settings
 console = Console()
 
 BANNER = """
-[bold cyan]Epstein Pipeline[/bold cyan] - Open Source Document Processing
-[dim]https://epsteinexposed.com | https://github.com/stonesalltheway1/Epstein-Pipeline[/dim]
+[bold cyan]Epstein Pipeline[/bold cyan] - Open Source Document Processing & Investigation
+[dim]https://github.com/evilander/Epstein-Pipeline[/dim]
 """
 
 
@@ -35,13 +35,12 @@ def _load_settings() -> Settings:
 @click.group()
 @click.version_option(package_name="epstein-pipeline")
 def cli() -> None:
-    """Epstein Pipeline -- Open Source Document Processing.
+    """Epstein Pipeline -- Open Source Document Processing & Investigation.
 
-    Process, OCR, deduplicate, and export Epstein case file documents.
+    Process, OCR, deduplicate, investigate, and export Epstein case file documents.
 
     \b
-    https://epsteinexposed.com
-    https://github.com/stonesalltheway1/Epstein-Pipeline
+    https://github.com/evilander/Epstein-Pipeline
     """
     console.print(BANNER)
 
@@ -1243,6 +1242,137 @@ def build_graph(input_dir: Path, output: Path | None, fmt: str) -> None:
         gexf_path = out_path.with_suffix(".gexf")
         KnowledgeGraphBuilder.export_gexf(graph, gexf_path)
         console.print(f"  [green]GEXF: {gexf_path}[/green]")
+
+
+# ---------------------------------------------------------------------------
+# investigate (interactive graph investigation)
+# ---------------------------------------------------------------------------
+
+
+@cli.command()
+@click.argument("input_dir", type=click.Path(exists=True, file_okay=False, path_type=Path))
+@click.option("--graph-json", type=click.Path(path_type=Path), default=None,
+              help="Pre-built graph JSON. If omitted, builds from input_dir.")
+@click.option("--non-interactive", is_flag=True, default=False,
+              help="Print top entities and exit instead of launching REPL.")
+def investigate(input_dir: Path, graph_json: Path | None, non_interactive: bool) -> None:
+    """Launch interactive investigation engine on a knowledge graph.
+
+    Builds a graph from processed documents (or loads a pre-built one), then
+    drops into an interactive REPL for multi-hop traversal, community detection,
+    temporal threading, and cross-entity discovery.
+
+    \b
+    Examples:
+      epstein-pipeline investigate ./output/entities
+      epstein-pipeline investigate ./output/entities --graph-json ./output/graph.json
+      epstein-pipeline investigate ./output/entities --non-interactive
+    """
+    from epstein_pipeline.models.document import Document, Email, Flight, Person, ProcessingResult
+    from epstein_pipeline.processors.knowledge_graph import KnowledgeGraph, KnowledgeGraphBuilder
+
+    # Load documents from processed JSON
+    json_files = sorted(input_dir.rglob("*.json"))
+    if not json_files:
+        console.print(f"[yellow]No JSON files found in {input_dir}[/yellow]")
+        return
+
+    documents: list[Document] = []
+    emails: list[Email] = []
+    flights: list[Flight] = []
+    persons: dict[str, Person] = {}
+
+    for jf in json_files:
+        try:
+            raw = json.loads(jf.read_text(encoding="utf-8"))
+
+            # Processing results (document wrapper)
+            if "document" in raw and raw["document"] is not None:
+                result = ProcessingResult.model_validate(raw)
+                if result.document:
+                    documents.append(result.document)
+            # Bare documents
+            elif "id" in raw and "title" in raw and "source" in raw:
+                documents.append(Document.model_validate(raw))
+            # Emails
+            elif "subject" in raw and "body" in raw:
+                emails.append(Email.model_validate(raw))
+            # Flights
+            elif "passengerIds" in raw or "pilotIds" in raw:
+                flights.append(Flight.model_validate(raw))
+            # Persons
+            elif "slug" in raw and "name" in raw:
+                p = Person.model_validate(raw)
+                persons[p.id] = p
+        except Exception:
+            continue
+
+    console.print(
+        f"Loaded [bold]{len(documents)}[/bold] documents, "
+        f"[bold]{len(emails)}[/bold] emails, "
+        f"[bold]{len(flights)}[/bold] flights, "
+        f"[bold]{len(persons)}[/bold] persons"
+    )
+
+    # Build or load graph
+    if graph_json and graph_json.exists():
+        graph_data = json.loads(graph_json.read_text(encoding="utf-8"))
+        from epstein_pipeline.processors.knowledge_graph import GraphEdge, GraphNode
+        graph = KnowledgeGraph(
+            nodes=[GraphNode(id=n["id"], label=n.get("label", n["id"]),
+                             type=n.get("type", "person")) for n in graph_data.get("nodes", [])],
+            edges=[GraphEdge(source=e["source"], target=e["target"],
+                             type=e.get("type", "co-occurrence"),
+                             weight=e.get("weight", 1.0)) for e in graph_data.get("links", [])],
+        )
+        console.print(f"Loaded graph from {graph_json}")
+    else:
+        builder = KnowledgeGraphBuilder()
+        builder.add_documents(documents)
+        if emails:
+            builder.add_emails(emails)
+        if flights:
+            builder.add_flights(flights)
+        if persons:
+            builder.add_person_labels({pid: p.name for pid, p in persons.items()})
+        graph = builder.build()
+        console.print("Built graph from loaded data")
+
+    console.print(f"  Nodes: {graph.node_count} | Edges: {graph.edge_count}")
+
+    if graph.node_count == 0:
+        console.print("[yellow]Graph is empty — no entities to investigate.[/yellow]")
+        return
+
+    # Launch investigation engine
+    from epstein_pipeline.processors.investigation import InvestigationEngine, InvestigationREPL
+
+    engine = InvestigationEngine(graph)
+    engine.load_documents(documents)
+    if emails:
+        engine.load_emails(emails)
+    if flights:
+        engine.load_flights(flights)
+    if persons:
+        engine.load_persons(list(persons.values()))
+
+    if non_interactive:
+        rankings = engine.top_entities(20, by="degree")
+        console.print("\n[bold]Top 20 entities by connection count:[/bold]")
+        table = Table(show_header=True)
+        table.add_column("Entity", style="cyan")
+        table.add_column("Connections", justify="right")
+        table.add_column("Type")
+        for entity_id, score in rankings:
+            node = engine._node_map.get(entity_id)
+            label = node.label if node else entity_id
+            ntype = node.type if node else "unknown"
+            table.add_row(label, str(int(score)), ntype)
+        console.print(table)
+        return
+
+    repl = InvestigationREPL(engine)
+    repl.run()
 
 
 # ---------------------------------------------------------------------------

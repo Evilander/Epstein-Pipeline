@@ -10,7 +10,7 @@ readme = "README.md"
 license = {text = "MIT"}
 requires-python = ">=3.10"
 authors = [
-    {name = "Epstein Exposed", email = "contact@epsteinexposed.com"},
+    {name = "Tyler Eveland", email = "j.tyler.eveland@gmail.com"},
 ]
 keywords = ["epstein", "osint", "document-processing", "ocr", "pipeline", "forensics", "pgvector", "semantic-search"]
 classifiers = [
@@ -83,8 +83,12 @@ audit = [
     "SPARQLWrapper>=2.0",
     "psycopg[binary]>=3.1",
 ]
+investigate = [
+    "networkx>=3.0",
+    "python-louvain>=0.16",
+]
 all = [
-    "epstein-pipeline[ocr,ocr-surya,pymupdf,nlp,nlp-gliner,ai,vision,transcription,embeddings,neon,classify,audit]",
+    "epstein-pipeline[ocr,ocr-surya,pymupdf,nlp,nlp-gliner,ai,vision,transcription,embeddings,neon,classify,audit,investigate]",
 ]
 dev = [
     "pytest>=7.0",
@@ -98,9 +102,8 @@ dev = [
 epstein-pipeline = "epstein_pipeline.cli:cli"
 
 [project.urls]
-Homepage = "https://epsteinexposed.com"
-Repository = "https://github.com/stonesalltheway1/Epstein-Pipeline"
-Issues = "https://github.com/stonesalltheway1/Epstein-Pipeline/issues"
+Repository = "https://github.com/evilander/Epstein-Pipeline"
+Issues = "https://github.com/evilander/Epstein-Pipeline/issues"
 
 [tool.setuptools.packages.find]
 where = ["src"]
