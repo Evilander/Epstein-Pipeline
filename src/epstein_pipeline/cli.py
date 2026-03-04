@@ -269,14 +269,14 @@ def search(query: str, database_url: str, limit: int, threshold: float) -> None:
 
 
 @cli.command()
-@click.argument("source", type=click.Choice(["doj", "kaggle", "huggingface", "archive"]))
+@click.argument("source", type=click.Choice(["doj", "kaggle", "huggingface", "archive", "ghostcrawl"]))
 @click.option(
     "--output", "-o", type=click.Path(path_type=Path), default=None, help="Output directory."
 )
 def download(source: str, output: Path | None) -> None:
     """Download documents from a supported source.
 
-    SOURCE must be one of: doj, kaggle, huggingface, archive.
+    SOURCE must be one of: doj, kaggle, huggingface, archive, ghostcrawl.
     """
     settings = _load_settings()
     out_dir = output or settings.data_dir / source
@@ -290,38 +290,15 @@ def download(source: str, output: Path | None) -> None:
         _download_huggingface(out_dir)
     elif source == "archive":
         _download_archive(out_dir)
+    elif source == "ghostcrawl":
+        _download_ghostcrawl(out_dir)
 
 
 def _download_doj(out_dir: Path) -> None:
-    console.print("[bold]Downloading DOJ EFTA documents...[/bold]")
-    try:
-        import httpx
-    except ImportError:
-        console.print("[red]httpx is required. Install with: pip install httpx[/red]")
-        sys.exit(1)
+    from epstein_pipeline.downloaders.doj import DojDownloader
 
-    index_url = "https://www.justice.gov/d9/2024-12/epstein_index.json"
-    console.print(f"  Fetching index from {index_url}")
-
-    try:
-        resp = httpx.get(index_url, timeout=60.0, follow_redirects=True)
-        resp.raise_for_status()
-        index_data = resp.json()
-    except Exception as exc:
-        console.print(f"[red]Failed to fetch DOJ index: {exc}[/red]")
-        sys.exit(1)
-
-    if isinstance(index_data, list):
-        items = index_data
-    elif isinstance(index_data, dict):
-        items = index_data.get("documents", index_data.get("files", []))
-    else:
-        items = []
-
-    console.print(f"  Found {len(items)} items in index")
-    index_path = out_dir / "doj_index.json"
-    index_path.write_text(json.dumps(index_data, indent=2), encoding="utf-8")
-    console.print(f"  [green]Saved index to {index_path}[/green]")
+    dl = DojDownloader()
+    dl.download_all(out_dir)
 
 
 def _download_kaggle(out_dir: Path) -> None:
@@ -382,6 +359,15 @@ def _download_archive(out_dir: Path) -> None:
         console.print(f"  [green]Saved to {manifest_path}[/green]")
     except Exception as exc:
         console.print(f"[red]Archive.org search failed: {exc}[/red]")
+
+
+def _download_ghostcrawl(out_dir: Path) -> None:
+    console.print("[bold]Downloading GhostCrawl Epstein datasets...[/bold]")
+    from epstein_pipeline.downloaders.ghostcrawl import GhostCrawlDownloader
+
+    dl = GhostCrawlDownloader()
+    dl.list_datasets()
+    dl.download(out_dir)
 
 
 # ---------------------------------------------------------------------------
@@ -1027,6 +1013,88 @@ def import_sea_doughnut(data_dir: Path, output: Path | None, limit: int | None) 
         encoding="utf-8",
     )
     console.print(f"\n[green]Summary saved to {summary_path}[/green]")
+
+
+# ---------------------------------------------------------------------------
+# import ghostcrawl-*
+# ---------------------------------------------------------------------------
+
+
+@import_group.command("ghostcrawl-mega")
+@click.option(
+    "--data-dir",
+    "-d",
+    type=click.Path(exists=True, file_okay=False, path_type=Path),
+    required=True,
+    help="Directory containing downloaded parquet files.",
+)
+@click.option(
+    "--output", "-o", type=click.Path(path_type=Path), default=None, help="Output directory."
+)
+@click.option("--limit", "-l", type=int, default=None, help="Limit documents imported.")
+def import_ghostcrawl_mega(data_dir: Path, output: Path | None, limit: int | None) -> None:
+    """Import GhostCrawl mega dataset (4.11M docs) or smaller HF datasets.
+
+    \b
+    Supports: mega, 20k, emails, fbi parquet files.
+    Examples:
+      epstein-pipeline import ghostcrawl-mega -d ./data/mega
+      epstein-pipeline import ghostcrawl-mega -d ./data/20k --limit 1000
+    """
+    settings = _load_settings()
+    out_dir = output or settings.output_dir / "ghostcrawl-mega"
+
+    from epstein_pipeline.importers.ghostcrawl import GhostCrawlImporter
+
+    importer = GhostCrawlImporter(data_dir)
+
+    total = 0
+    total += importer.import_mega(output_dir=out_dir, limit=limit)
+    total += importer.import_20k(output_dir=out_dir, limit=limit)
+    total += importer.import_emails(output_dir=out_dir, limit=limit)
+    total += importer.import_fbi(output_dir=out_dir, limit=limit)
+
+    console.print(f"\n[green]Total imported: {total:,} documents → {out_dir}[/green]")
+
+
+@import_group.command("ghostcrawl-graph")
+@click.option(
+    "--output", "-o", type=click.Path(path_type=Path), default=None, help="Output directory."
+)
+def import_ghostcrawl_graph(output: Path | None) -> None:
+    """Import GhostCrawl knowledge graph (524 entities, 2K+ relationships).
+
+    Downloads directly from GitHub — no local data needed.
+    """
+    settings = _load_settings()
+    out_dir = output or settings.output_dir / "ghostcrawl-graph"
+
+    from epstein_pipeline.importers.ghostcrawl_graph import GhostCrawlGraphImporter
+
+    importer = GhostCrawlGraphImporter()
+    graph = importer.import_graph(output_dir=out_dir)
+
+    console.print(f"\n[green]Graph: {len(graph.nodes)} nodes, {len(graph.edges)} edges → {out_dir}[/green]")
+
+
+@import_group.command("ghostcrawl-flights")
+@click.option(
+    "--output", "-o", type=click.Path(path_type=Path), default=None, help="Output directory."
+)
+def import_ghostcrawl_flights(output: Path | None) -> None:
+    """Import GhostCrawl parsed flight logs (Lolita Express).
+
+    Downloads directly from GitHub — no local data needed.
+    """
+    settings = _load_settings()
+    out_dir = output or settings.output_dir / "ghostcrawl-flights"
+
+    from epstein_pipeline.importers.ghostcrawl_flights import GhostCrawlFlightImporter
+
+    importer = GhostCrawlFlightImporter()
+    flights = importer.import_flights(output_dir=out_dir)
+
+    console.print(f"\n[green]Imported {len(flights):,} flights → {out_dir}[/green]")
 
 
 # ---------------------------------------------------------------------------

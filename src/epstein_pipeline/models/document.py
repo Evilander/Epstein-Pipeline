@@ -26,6 +26,12 @@ DocumentSource = Literal[
     "kaggle",
     "huggingface",
     "sea-doughnut",
+    # GhostCrawl HuggingFace datasets
+    "ghostcrawl-mega",
+    "ghostcrawl-20k",
+    "ghostcrawl-embeddings",
+    "ghostcrawl-emails",
+    "ghostcrawl-fbi",
     # DOJ dataset-specific EFTA sources (Sea_Doughnut v2)
     "efta-ds1",
     "efta-ds2",
