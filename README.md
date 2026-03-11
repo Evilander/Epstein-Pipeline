@@ -1,12 +1,16 @@
 # Epstein Pipeline
 
 [![CI](https://github.com/evilander/Epstein-Pipeline/actions/workflows/ci.yml/badge.svg)](https://github.com/evilander/Epstein-Pipeline/actions/workflows/ci.yml)
+[![PyPI](https://img.shields.io/pypi/v/epstein-pipeline.svg)](https://pypi.org/project/epstein-pipeline/)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 Open-source document processing pipeline for the Jeffrey Epstein case files. Downloads, OCRs, extracts entities, deduplicates, embeds, and exports **2.1 million+ documents** to Neon Postgres with pgvector semantic search.
 
 **This is the data engine behind [epsteinexposed.com](https://epsteinexposed.com)** -- the most comprehensive searchable database of the Epstein files.
+
+Published package: [`epstein-pipeline` on PyPI](https://pypi.org/project/epstein-pipeline/)  
+Install with: `pip install epstein-pipeline`
 
 ## What It Does
 
