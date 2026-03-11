@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import importlib.util
+import os
 from enum import Enum
 from pathlib import Path
-from typing import Literal
+from typing import Literal, TypedDict
 
 from pydantic_settings import BaseSettings
 
@@ -34,6 +36,34 @@ class DedupMode(str, Enum):
     MINHASH = "minhash"  # MinHash/LSH near-duplicate
     SEMANTIC = "semantic"  # embedding cosine similarity
     ALL = "all"  # exact → minhash → semantic
+
+
+class PathCheck(TypedDict):
+    path: str
+    exists: bool
+    writable: bool
+
+
+class EnvFlags(TypedDict):
+    neon_database_url: bool
+    opensanctions_api_key: bool
+    auditor_anthropic_api_key: bool
+    auditor_voyage_api_key: bool
+    auditor_cohere_api_key: bool
+
+
+class PersonsRegistryStatus(TypedDict):
+    configured_path: str
+    resolved_path: str
+    exists: bool
+    using_bundled_fallback: bool
+
+
+class RuntimeSummary(TypedDict):
+    paths: dict[str, PathCheck]
+    optional_dependencies: dict[str, bool]
+    env: EnvFlags
+    persons_registry: PersonsRegistryStatus
 
 
 class Settings(BaseSettings):
@@ -145,3 +175,68 @@ class Settings(BaseSettings):
         self.data_dir.mkdir(parents=True, exist_ok=True)
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self.cache_dir.mkdir(parents=True, exist_ok=True)
+
+    def resolve_persons_registry_path(self) -> Path:
+        """Return the runtime registry path, falling back to the bundled registry."""
+        if self.persons_registry_path.exists():
+            return self.persons_registry_path
+
+        bundled = Path(__file__).with_name("persons-registry.json")
+        if bundled.exists():
+            return bundled
+
+        return self.persons_registry_path
+
+    def runtime_summary(self) -> RuntimeSummary:
+        """Return a lightweight runtime snapshot for operator checks."""
+        resolved_registry = self.resolve_persons_registry_path()
+        path_checks = {
+            "data_dir": _path_check(self.data_dir, is_dir=True),
+            "output_dir": _path_check(self.output_dir, is_dir=True),
+            "cache_dir": _path_check(self.cache_dir, is_dir=True),
+            "persons_registry": _path_check(resolved_registry, is_dir=False),
+        }
+        optional_dependencies = {
+            "spacy": _module_available("spacy"),
+            "gliner": _module_available("gliner"),
+            "pymupdf": _module_available("fitz"),
+            "faster_whisper": _module_available("faster_whisper"),
+            "sentence_transformers": _module_available("sentence_transformers"),
+            "psycopg": _module_available("psycopg"),
+        }
+        env_flags: EnvFlags = {
+            "neon_database_url": bool(self.neon_database_url),
+            "opensanctions_api_key": bool(self.opensanctions_api_key),
+            "auditor_anthropic_api_key": bool(self.auditor_anthropic_api_key),
+            "auditor_voyage_api_key": bool(self.auditor_voyage_api_key),
+            "auditor_cohere_api_key": bool(self.auditor_cohere_api_key),
+        }
+
+        return {
+            "paths": path_checks,
+            "optional_dependencies": optional_dependencies,
+            "env": env_flags,
+            "persons_registry": {
+                "configured_path": str(self.persons_registry_path.resolve()),
+                "resolved_path": str(resolved_registry.resolve()),
+                "exists": resolved_registry.exists(),
+                "using_bundled_fallback": resolved_registry != self.persons_registry_path,
+            },
+        }
+
+
+def _module_available(module_name: str) -> bool:
+    """Check whether an optional dependency is importable without importing it."""
+    return importlib.util.find_spec(module_name) is not None
+
+
+def _path_check(path: Path, *, is_dir: bool) -> PathCheck:
+    """Return basic existence and writability information for a path."""
+    target = path if is_dir else path.parent
+    exists = path.exists()
+    writable = target.exists() and os.access(target, os.W_OK)
+    return {
+        "path": str(path.resolve()),
+        "exists": exists,
+        "writable": writable,
+    }

@@ -3,16 +3,11 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
 from unittest.mock import patch
 
 import pytest
 
 from epstein_pipeline.models.document import Document, Email, EmailContact, Flight
-from epstein_pipeline.processors.knowledge_graph import (
-    KnowledgeGraph,
-    KnowledgeGraphBuilder,
-)
 from epstein_pipeline.processors.investigation import (
     Community,
     ConnectionPath,
@@ -21,7 +16,10 @@ from epstein_pipeline.processors.investigation import (
     InvestigationResult,
     TemporalThread,
 )
-
+from epstein_pipeline.processors.knowledge_graph import (
+    KnowledgeGraph,
+    KnowledgeGraphBuilder,
+)
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -132,29 +130,57 @@ def engine(rich_graph) -> InvestigationEngine:
     eng = InvestigationEngine(rich_graph)
     # Load documents, flights, and emails so shared_* methods work
     docs = [
-        Document(id="d1", title="Doc 1", source="other", category="other",
-                 personIds=["p-0001", "p-0002"]),
-        Document(id="d2", title="Doc 2", source="other", category="other",
-                 personIds=["p-0002", "p-0003"]),
-        Document(id="d3", title="Doc 3", source="other", category="other",
-                 personIds=["p-0003", "p-0004"]),
-        Document(id="d4", title="Doc 4", source="other", category="other",
-                 personIds=["p-0001", "p-0002", "p-0003"]),
+        Document(
+            id="d1", title="Doc 1", source="other", category="other", personIds=["p-0001", "p-0002"]
+        ),
+        Document(
+            id="d2", title="Doc 2", source="other", category="other", personIds=["p-0002", "p-0003"]
+        ),
+        Document(
+            id="d3", title="Doc 3", source="other", category="other", personIds=["p-0003", "p-0004"]
+        ),
+        Document(
+            id="d4",
+            title="Doc 4",
+            source="other",
+            category="other",
+            personIds=["p-0001", "p-0002", "p-0003"],
+        ),
     ]
     flights = [
-        Flight(id="f1", date="1999-03-15", aircraft="Gulfstream",
-               tailNumber="N908JE", origin="TIST", destination="KPBI",
-               passengerIds=["p-0001", "p-0002", "p-0005"], pilotIds=[]),
-        Flight(id="f2", date="2001-06-20", aircraft="Boeing 727",
-               tailNumber="N908JE", origin="KPBI", destination="CYUL",
-               passengerIds=["p-0003"], pilotIds=["p-0004"]),
+        Flight(
+            id="f1",
+            date="1999-03-15",
+            aircraft="Gulfstream",
+            tailNumber="N908JE",
+            origin="TIST",
+            destination="KPBI",
+            passengerIds=["p-0001", "p-0002", "p-0005"],
+            pilotIds=[],
+        ),
+        Flight(
+            id="f2",
+            date="2001-06-20",
+            aircraft="Boeing 727",
+            tailNumber="N908JE",
+            origin="KPBI",
+            destination="CYUL",
+            passengerIds=["p-0003"],
+            pilotIds=["p-0004"],
+        ),
     ]
     emails = [
-        Email(id="e1", subject="Meeting",
-              **{"from": EmailContact(name="A", email="a@test.com", personSlug="p-0001")},
-              to=[EmailContact(name="B", email="b@test.com", personSlug="p-0002")],
-              cc=[], date="2002-01-10", body="meeting notes",
-              personIds=["p-0001", "p-0002"], folder="inbox"),
+        Email(
+            id="e1",
+            subject="Meeting",
+            **{"from": EmailContact(name="A", email="a@test.com", personSlug="p-0001")},
+            to=[EmailContact(name="B", email="b@test.com", personSlug="p-0002")],
+            cc=[],
+            date="2002-01-10",
+            body="meeting notes",
+            personIds=["p-0001", "p-0002"],
+            folder="inbox",
+        ),
     ]
     eng.load_documents(docs)
     eng.load_flights(flights)
@@ -412,9 +438,7 @@ class TestTemporalThread:
         assert len(thread.entity_ids) == 2
 
     def test_temporal_thread_with_dates(self, engine):
-        thread = engine.temporal_thread(
-            ["p-0001"], date_range=("1998-01-01", "2005-12-31")
-        )
+        thread = engine.temporal_thread(["p-0001"], date_range=("1998-01-01", "2005-12-31"))
         assert isinstance(thread, TemporalThread)
 
     def test_temporal_thread_empty_entity(self, engine):
@@ -462,7 +486,6 @@ class TestWhoConnects:
         connectors = engine.who_connects("p-0001", "p-0003")
         assert isinstance(connectors, list)
         # p-0002 should be an intermediary
-        connector_ids = [c if isinstance(c, str) else c.get("id", c) for c in connectors]
         # Check p-0002 appears somewhere in results
         found = any("p-0002" in str(c) for c in connectors)
         assert found or len(connectors) > 0

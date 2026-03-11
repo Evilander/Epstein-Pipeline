@@ -72,7 +72,7 @@ Archive.org Mirrors            ─┘
 pip install "epstein-pipeline[all]"
 python -m spacy download en_core_web_sm
 
-# Download a DOJ dataset
+# Download one DOJ dataset, or add --list-datasets to browse the catalog
 epstein-pipeline download doj --dataset 9
 
 # OCR with automatic backend selection
@@ -85,8 +85,21 @@ epstein-pipeline extract-entities ./processed/ --output ./entities/
 epstein-pipeline embed ./processed/ --output ./embeddings/ --format neon
 
 # Export everything to Neon Postgres
-epstein-pipeline export neon --input-dir ./processed/
+epstein-pipeline export-neon ./processed/
 ```
+
+### 30-Second Smoke Test
+
+```bash
+epstein-pipeline --version
+epstein-pipeline status --json
+epstein-pipeline status --fail-on-unhealthy
+epstein-pipeline validate ./processed/
+```
+
+Use `epstein-pipeline status --fail-on-unhealthy` in wrappers or CI when you want a fast stop signal before a long ingest or export run. Add `--check-database` when `EPSTEIN_NEON_DATABASE_URL` is configured and you want the smoke test to include a live Neon ping.
+
+Release operators should also read [`docs/production-readiness.md`](docs/production-readiness.md) and the concrete [`docs/release-v1.0.1.md`](docs/release-v1.0.1.md) handoff.
 
 ### Neon Postgres Setup
 
@@ -163,7 +176,7 @@ epstein-pipeline download archive               # Download from Archive.org mirr
 epstein-pipeline ocr ./pdfs/ -o ./out/          # OCR (auto backend selection)
 epstein-pipeline ocr ./pdfs/ --backend surya    # OCR with specific backend
 epstein-pipeline extract-entities ./out/ -o ./e/ # NER extraction (spaCy + GLiNER)
-epstein-pipeline classify --input-dir ./out/    # Zero-shot document classification
+epstein-pipeline classify ./out/                # Zero-shot document classification
 epstein-pipeline dedup ./out/ --mode all        # 3-pass deduplication
 epstein-pipeline embed ./out/ -o ./emb/         # Generate embeddings
 
@@ -171,7 +184,7 @@ epstein-pipeline embed ./out/ -o ./emb/         # Generate embeddings
 epstein-pipeline export json ./out/ -o ./site/  # JSON for website
 epstein-pipeline export csv ./out/ -o docs.csv  # CSV for researchers
 epstein-pipeline export sqlite ./out/ -o ep.db  # SQLite database
-epstein-pipeline export neon --input-dir ./out/ # Push to Neon Postgres
+epstein-pipeline export-neon ./out/             # Push to Neon Postgres
 
 # -- Database ------------------------------------------------------
 epstein-pipeline migrate                        # Run Neon schema migration
@@ -296,11 +309,10 @@ All configuration is via environment variables prefixed with `EPSTEIN_`. No cred
 
 | Format | Use Case | Command |
 |--------|----------|---------|
-| **Neon Postgres** | Production website, semantic search | `export neon` |
+| **Neon Postgres** | Production website, semantic search | `export-neon` |
 | **JSON** | Static site generation, API consumption | `export json` |
 | **CSV** | Research, spreadsheet analysis | `export csv` |
 | **SQLite** | Local querying, offline research | `export sqlite` |
-| **NDJSON** | Streaming, log-style processing | `export json --format ndjson` |
 
 ## Data Sources
 
@@ -328,6 +340,7 @@ See [docs/DATA_SOURCES.md](docs/DATA_SOURCES.md) for the complete list.
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | System architecture and design decisions |
 | [docs/DATA_SOURCES.md](docs/DATA_SOURCES.md) | All known public data sources |
 | [docs/PROCESSORS.md](docs/PROCESSORS.md) | Processor reference (OCR, NER, dedup, etc.) |
+| [docs/production-readiness.md](docs/production-readiness.md) | Release checks, CI contract, and ship checklist |
 | [docs/SITE_SYNC.md](docs/SITE_SYNC.md) | Syncing processed data to epsteinexposed.com |
 | [docs/SEA_DOUGHNUT.md](docs/SEA_DOUGHNUT.md) | Sea_Doughnut research data integration |
 

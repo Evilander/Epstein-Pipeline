@@ -1,3 +1,3 @@
-"""Epstein Pipeline - Open source document processing pipeline for the Epstein case files."""
+"""Epstein Pipeline - open source document processing for investigative corpora."""
 
-__version__ = "0.2.0"
+__version__ = "1.0.1"

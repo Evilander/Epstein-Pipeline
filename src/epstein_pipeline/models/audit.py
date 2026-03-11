@@ -7,7 +7,6 @@ the 5-phase audit pipeline (dedup, wikidata, factcheck, coherence, scoring).
 from __future__ import annotations
 
 from enum import Enum
-from typing import Any
 
 from pydantic import BaseModel, Field
 
@@ -15,17 +14,17 @@ from pydantic import BaseModel, Field
 class AuditIssueType(str, Enum):
     """Categories of data quality issues, each with a base severity score."""
 
-    DUPLICATE_ENTRY = "duplicate_entry"                # base: 50
-    MERGED_IDENTITY = "merged_identity"                # base: 80
-    WRONG_PERSON = "wrong_person_entirely"             # base: 90
-    BIO_INACCURACY = "bio_inaccuracy"                  # base: 30
-    BIO_CONTRADICTION = "bio_contradiction"            # base: 40
+    DUPLICATE_ENTRY = "duplicate_entry"  # base: 50
+    MERGED_IDENTITY = "merged_identity"  # base: 80
+    WRONG_PERSON = "wrong_person_entirely"  # base: 90
+    BIO_INACCURACY = "bio_inaccuracy"  # base: 30
+    BIO_CONTRADICTION = "bio_contradiction"  # base: 40
     EXTERNAL_CONTRADICTION = "external_contradiction"  # base: 60
-    WRONG_CATEGORY = "wrong_category"                  # base: 20
-    MISSING_CRITICAL_INFO = "missing_critical_info"    # base: 15
-    UNGROUNDED_CLAIM = "ungrounded_claim"              # base: 25
-    STALE_DATA = "stale_data"                          # base: 10
-    WRONG_IMAGE = "wrong_image"                        # base: 35
+    WRONG_CATEGORY = "wrong_category"  # base: 20
+    MISSING_CRITICAL_INFO = "missing_critical_info"  # base: 15
+    UNGROUNDED_CLAIM = "ungrounded_claim"  # base: 25
+    STALE_DATA = "stale_data"  # base: 10
+    WRONG_IMAGE = "wrong_image"  # base: 35
 
 
 # Base severity scores for each issue type
@@ -150,14 +149,16 @@ class AuditRunSummary(BaseModel):
     persons_scanned: int = 0
     issues_found: int = 0
     critical_count: int = 0  # severity >= 70
-    high_count: int = 0      # severity >= 40
-    medium_count: int = 0    # severity >= 20
-    low_count: int = 0       # severity < 20
+    high_count: int = 0  # severity >= 40
+    medium_count: int = 0  # severity >= 20
+    low_count: int = 0  # severity < 20
     total_cost_cents: int = 0
     phases_completed: list[str] = Field(default_factory=list)
     results: list[PersonAuditResult] = Field(default_factory=list, exclude=True)
 
-    def tally(self, results: list[PersonAuditResult], critical: int = 70, high: int = 40, medium: int = 20) -> None:
+    def tally(
+        self, results: list[PersonAuditResult], critical: int = 70, high: int = 40, medium: int = 20
+    ) -> None:
         """Compute summary stats from results."""
         self.results = results
         self.persons_scanned = len(results)

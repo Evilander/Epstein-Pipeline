@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import logging
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any, cast
 
 import httpx
 from rich.console import Console
@@ -17,12 +19,15 @@ from rich.progress import (
 )
 from rich.table import Table
 
+from epstein_pipeline.utils.paths import safe_join
+
 # ---------------------------------------------------------------------------
 # Archive.org API base URLs
 # ---------------------------------------------------------------------------
 _SEARCH_URL = "https://archive.org/advancedsearch.php"
 _METADATA_URL = "https://archive.org/metadata"
 _DOWNLOAD_URL = "https://archive.org/download"
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -186,7 +191,15 @@ class ArchiveDownloader:
                     if source == "metadata" and file_extensions is None:
                         continue
 
-                    dest = item_dir / filename
+                    try:
+                        dest = safe_join(item_dir, filename)
+                    except ValueError as exc:
+                        logger.warning(
+                            "Skipping Archive.org file with unsafe path %r: %s",
+                            filename,
+                            exc,
+                        )
+                        continue
                     if dest.exists():
                         file_size = dest.stat().st_size
                         expected = int(file_meta.get("size", 0))
@@ -314,10 +327,10 @@ class ArchiveDownloader:
             resp.raise_for_status()
 
             data = resp.json()
-            if isinstance(data, dict) and "result" in data:
-                return data["result"]
+            if isinstance(data, dict) and "result" in data and isinstance(data["result"], list):
+                return cast(list[dict[str, Any]], data["result"])
             if isinstance(data, list):
-                return data
+                return cast(list[dict[str, Any]], data)
             return []
 
     def _download_file(self, url: str, dest: Path) -> int:

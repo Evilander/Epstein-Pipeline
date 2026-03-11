@@ -13,8 +13,18 @@ import time
 from pathlib import Path
 
 STAGES = (
-    "ocr", "entities", "redaction", "images", "transcription", "dedup", "graph",
-    "audit_dedup", "audit_wikidata", "audit_factcheck", "audit_coherence", "audit_score",
+    "ocr",
+    "entities",
+    "redaction",
+    "images",
+    "transcription",
+    "dedup",
+    "graph",
+    "audit_dedup",
+    "audit_wikidata",
+    "audit_factcheck",
+    "audit_coherence",
+    "audit_score",
 )
 
 _SCHEMA = """
@@ -96,7 +106,7 @@ class ProcessingState:
         if not file_hashes:
             return []
 
-        processed = set()
+        processed: set[str] = set()
         # Query in batches of 500 to avoid SQLite variable limits
         for i in range(0, len(file_hashes), 500):
             batch = file_hashes[i : i + 500]

@@ -1033,9 +1033,7 @@ class NeonExporter:
 
             # 4. Document integrity hashes
             if document_hashes:
-                counts["document_hashes"] = await self.upsert_document_hashes(
-                    document_hashes
-                )
+                counts["document_hashes"] = await self.upsert_document_hashes(document_hashes)
 
         except Exception:
             logger.exception("Error during Neon export")

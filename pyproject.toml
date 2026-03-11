@@ -4,10 +4,11 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "epstein-pipeline"
-version = "1.0.0"
+dynamic = ["version"]
 description = "World-class document processing pipeline for the Epstein case files — OCR, NER, dedup, embeddings, knowledge graph, Neon Postgres export"
 readme = "README.md"
-license = {text = "MIT"}
+license = "MIT"
+license-files = ["LICENSE"]
 requires-python = ">=3.10"
 authors = [
     {name = "evilander"},
@@ -16,7 +17,6 @@ keywords = ["epstein", "osint", "document-processing", "ocr", "pipeline", "foren
 classifiers = [
     "Development Status :: 5 - Production/Stable",
     "Intended Audience :: Science/Research",
-    "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
@@ -91,6 +91,7 @@ all = [
     "epstein-pipeline[ocr,ocr-surya,pymupdf,nlp,nlp-gliner,ai,vision,transcription,embeddings,neon,classify,audit,investigate]",
 ]
 dev = [
+    "build>=1.2",
     "pytest>=7.0",
     "pytest-cov>=4.0",
     "pytest-asyncio>=0.23",
@@ -108,13 +109,23 @@ Issues = "https://github.com/evilander/Epstein-Pipeline/issues"
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+epstein_pipeline = ["persons-registry.json"]
+
+[tool.setuptools.dynamic]
+version = {attr = "epstein_pipeline.__version__"}
+
 [tool.ruff]
 target-version = "py310"
 line-length = 100
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "N", "W"]
-ignore = ["N815"]  # mixedCase field names match site TypeScript types
+ignore = [
+    "E501",  # prompt blocks, SQL, and rich output are clearer when not force-wrapped
+    "N806",  # graph code intentionally uses capitalized network objects
+    "N815",  # mixedCase field names match site TypeScript types
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -125,3 +136,5 @@ asyncio_mode = "auto"
 python_version = "3.10"
 warn_return_any = true
 warn_unused_configs = true
+ignore_missing_imports = true
+files = ["src/epstein_pipeline"]

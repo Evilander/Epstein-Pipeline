@@ -111,7 +111,7 @@ class PlistForensicsProcessor:
             else data.get("kMDItemAuthorAddresses")
         )
 
-        recipients = []
+        recipients: list[str] = []
         for key in ("to", "recipients", "X-To", "kMDItemRecipientAddresses"):
             val = data.get(key)
             if isinstance(val, list):

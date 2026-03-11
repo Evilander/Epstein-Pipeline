@@ -15,6 +15,7 @@ import io
 import json
 import logging
 from pathlib import Path
+from typing import Any, cast
 
 import httpx
 from rich.console import Console
@@ -48,12 +49,17 @@ def _fetch_text(url: str) -> str:
         return resp.text
 
 
-def _fetch_json(url: str) -> list | dict:
+def _fetch_json(url: str) -> list[dict[str, Any]] | dict[str, Any]:
     """Fetch and parse JSON from a URL."""
     with httpx.Client(timeout=30.0, follow_redirects=True) as client:
         resp = client.get(url)
         resp.raise_for_status()
-        return resp.json()
+        payload = resp.json()
+        if isinstance(payload, list):
+            return cast(list[dict[str, Any]], payload)
+        if isinstance(payload, dict):
+            return cast(dict[str, Any], payload)
+        return {}
 
 
 class GhostCrawlFlightImporter:
@@ -82,9 +88,7 @@ class GhostCrawlFlightImporter:
             all_flights.extend(flights)
 
         if not all_flights:
-            console.print(
-                "  [yellow]No flight data available from known sources.[/yellow]"
-            )
+            console.print("  [yellow]No flight data available from known sources.[/yellow]")
             console.print(
                 "  [dim]Flight CSVs may have been removed during repo reorganisation.[/dim]"
             )
@@ -121,15 +125,21 @@ class GhostCrawlFlightImporter:
 
         console.print("  Fetching persons registry from GitHub...")
         try:
-            persons = _fetch_json(_PERSONS_REGISTRY_URL)
+            persons_payload = _fetch_json(_PERSONS_REGISTRY_URL)
         except Exception as exc:
             console.print(f"  [red]Failed to fetch persons registry: {exc}[/red]")
             return []
+
+        if not isinstance(persons_payload, list):
+            console.print("  [red]Persons registry payload was not a list.[/red]")
+            return []
+        persons = persons_payload
 
         console.print(f"  [green]Got {len(persons)} persons[/green]")
 
         # Category breakdown
         from collections import Counter
+
         cats = Counter(p.get("category", "unknown") for p in persons)
         for cat, count in cats.most_common(8):
             console.print(f"    {cat}: {count}")
@@ -173,9 +183,7 @@ class GhostCrawlFlightImporter:
 
             passengers_raw = r.get("passengers") or r.get("passenger_list") or ""
             if passengers_raw:
-                passenger_names = [
-                    p.strip() for p in passengers_raw.split(",") if p.strip()
-                ]
+                passenger_names = [p.strip() for p in passengers_raw.split(",") if p.strip()]
             else:
                 passenger_names = []
 

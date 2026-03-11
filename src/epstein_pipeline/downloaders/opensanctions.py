@@ -191,14 +191,18 @@ def download_opensanctions(
         persons = json.load(f)
 
     if isinstance(persons, dict):
-        persons_list = list(persons.values()) if not isinstance(next(iter(persons.values()), None), str) else [persons]
+        persons_list = (
+            list(persons.values())
+            if not isinstance(next(iter(persons.values()), None), str)
+            else [persons]
+        )
     elif isinstance(persons, list):
         persons_list = persons
     else:
         console.print("[red]Unexpected persons registry format[/red]")
         return
 
-    console.print(f"[bold]OpenSanctions Cross-Reference[/bold]")
+    console.print("[bold]OpenSanctions Cross-Reference[/bold]")
     console.print(f"Persons to check: [cyan]{len(persons_list)}[/cyan]")
     console.print(f"API: [cyan]{_API_BASE}[/cyan]")
     console.print(f"Match threshold: [cyan]{match_threshold}[/cyan]")

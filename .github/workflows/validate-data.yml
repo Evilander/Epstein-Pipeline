@@ -19,5 +19,5 @@ jobs:
         run: |
           for f in $(git diff --name-only origin/main -- '*.json'); do
             echo "Validating $f..."
-            epstein-pipeline validate "$f" || exit 1
+            python -m epstein_pipeline.cli validate "$f" || exit 1
           done

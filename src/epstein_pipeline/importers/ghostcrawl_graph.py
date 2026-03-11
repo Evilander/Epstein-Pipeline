@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import logging
 from pathlib import Path
+from typing import Any, cast
 
 import httpx
 from rich.console import Console
@@ -60,22 +61,28 @@ _CATEGORY_MAP = {
 }
 
 
-def _fetch_json(url: str) -> list | dict:
+def _fetch_json(url: str) -> list[dict[str, Any]] | dict[str, Any]:
     """Fetch and parse JSON from a URL."""
     with httpx.Client(timeout=30.0, follow_redirects=True) as client:
         resp = client.get(url)
         resp.raise_for_status()
-        return resp.json()
+        payload = resp.json()
+        if isinstance(payload, list):
+            return cast(list[dict[str, Any]], payload)
+        if isinstance(payload, dict):
+            return cast(dict[str, Any], payload)
+        return {}
 
 
-def _parse_metadata(raw: str | dict | None) -> dict:
+def _parse_metadata(raw: str | dict[str, Any] | None) -> dict[str, Any]:
     """Parse metadata field — may be a JSON string or already a dict."""
     if not raw:
         return {}
     if isinstance(raw, dict):
         return raw
     try:
-        return json.loads(raw)
+        payload = json.loads(raw)
+        return cast(dict[str, Any], payload) if isinstance(payload, dict) else {}
     except (json.JSONDecodeError, TypeError):
         return {}
 
@@ -99,6 +106,10 @@ class GhostCrawlGraphImporter:
         except Exception as exc:
             console.print(f"  [red]Failed to fetch entities: {exc}[/red]")
             return KnowledgeGraph()
+        if not isinstance(raw_entities, list):
+            console.print("  [red]Entity payload was not a list.[/red]")
+            return KnowledgeGraph()
+        raw_entities = cast(list[dict[str, Any]], raw_entities)
 
         console.print(f"  [green]Got {len(raw_entities)} entities[/green]")
 
@@ -109,6 +120,10 @@ class GhostCrawlGraphImporter:
         except Exception as exc:
             console.print(f"  [red]Failed to fetch relationships: {exc}[/red]")
             raw_rels = []
+        if not isinstance(raw_rels, list):
+            console.print("  [yellow]Relationship payload was not a list.[/yellow]")
+            raw_rels = []
+        raw_rels = cast(list[dict[str, Any]], raw_rels)
 
         console.print(f"  [green]Got {len(raw_rels)} relationships[/green]")
 
@@ -117,7 +132,7 @@ class GhostCrawlGraphImporter:
 
         # Build graph
         nodes: list[GraphNode] = []
-        persons: list[dict] = []
+        persons: list[dict[str, Any]] = []
 
         for i, entity in enumerate(raw_entities):
             name = entity.get("name", "")
@@ -153,28 +168,22 @@ class GhostCrawlGraphImporter:
             if meta.get("legal_status"):
                 bio_parts.append(meta["legal_status"])
 
-            persons.append({
-                "id": f"gc-{eid}",
-                "slug": slug,
-                "name": name,
-                "aliases": entity.get("aliases") or [],
-                "category": _CATEGORY_MAP.get(etype, "individual"),
-                "shortBio": " — ".join(bio_parts) if bio_parts else "",
-            })
+            persons.append(
+                {
+                    "id": f"gc-{eid}",
+                    "slug": slug,
+                    "name": name,
+                    "aliases": entity.get("aliases") or [],
+                    "category": _CATEGORY_MAP.get(etype, "individual"),
+                    "shortBio": " — ".join(bio_parts) if bio_parts else "",
+                }
+            )
 
         # Build edges — new schema uses source_entity_id/target_entity_id (numeric)
         edges: list[GraphEdge] = []
         for rel in raw_rels:
-            source = str(
-                rel.get("source_entity_id")
-                or rel.get("source")
-                or rel.get("from", "")
-            )
-            target = str(
-                rel.get("target_entity_id")
-                or rel.get("target")
-                or rel.get("to", "")
-            )
+            source = str(rel.get("source_entity_id") or rel.get("source") or rel.get("from", ""))
+            target = str(rel.get("target_entity_id") or rel.get("target") or rel.get("to", ""))
             rel_type = (
                 rel.get("relationship_type")
                 or rel.get("type")
@@ -183,21 +192,23 @@ class GhostCrawlGraphImporter:
             weight = float(rel.get("weight", 1.0))
             rel_meta = _parse_metadata(rel.get("metadata"))
 
-            edges.append(GraphEdge(
-                source=source,
-                target=target,
-                type=rel_type,
-                weight=weight,
-                attributes={
-                    "evidence": rel_meta.get("notes", ""),
-                    "evidence_type": rel_meta.get("evidence_type", ""),
-                    "efta_ref": rel_meta.get("efta", ""),
-                    "data_source": rel_meta.get("source", ""),
-                    "date_first": rel.get("date_first"),
-                    "date_last": rel.get("date_last"),
-                    "source": "ghostcrawl-graph",
-                },
-            ))
+            edges.append(
+                GraphEdge(
+                    source=source,
+                    target=target,
+                    type=rel_type,
+                    weight=weight,
+                    attributes={
+                        "evidence": rel_meta.get("notes", ""),
+                        "evidence_type": rel_meta.get("evidence_type", ""),
+                        "efta_ref": rel_meta.get("efta", ""),
+                        "data_source": rel_meta.get("source", ""),
+                        "date_first": rel.get("date_first"),
+                        "date_last": rel.get("date_last"),
+                        "source": "ghostcrawl-graph",
+                    },
+                )
+            )
 
         graph = KnowledgeGraph(nodes=nodes, edges=edges)
 
@@ -215,8 +226,7 @@ class GhostCrawlGraphImporter:
             graph_path = output_dir / "ghostcrawl-graph.json"
             graph_data = {
                 "nodes": [
-                    {"id": n.id, "label": n.label, "type": n.type, **n.attributes}
-                    for n in nodes
+                    {"id": n.id, "label": n.label, "type": n.type, **n.attributes} for n in nodes
                 ],
                 "edges": [
                     {

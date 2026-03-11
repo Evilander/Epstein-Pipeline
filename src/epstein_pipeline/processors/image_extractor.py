@@ -135,7 +135,8 @@ class ImageExtractor:
                 timeout=120.0,
             )
             resp.raise_for_status()
-            return resp.json().get("response", "").strip()
+            data = resp.json()
+            return str(data.get("response", "")).strip()
         except Exception as exc:
             logger.warning("Ollama vision failed: %s", exc)
             return None
@@ -165,7 +166,8 @@ class ImageExtractor:
                 ],
                 max_tokens=300,
             )
-            return resp.choices[0].message.content.strip()
+            content = resp.choices[0].message.content
+            return content.strip() if isinstance(content, str) else None
         except Exception as exc:
             logger.warning("OpenAI vision failed: %s", exc)
             return None

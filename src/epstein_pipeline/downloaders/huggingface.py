@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -15,6 +16,10 @@ from rich.progress import (
     TransferSpeedColumn,
 )
 from rich.table import Table
+
+from epstein_pipeline.utils.paths import safe_join
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -204,7 +209,15 @@ class HuggingFaceDownloader:
                         continue
 
                     file_url = f"https://huggingface.co/datasets/{repo_id}/resolve/main/{rfilename}"
-                    dest = local_dir / rfilename
+                    try:
+                        dest = safe_join(local_dir, rfilename)
+                    except ValueError as exc:
+                        logger.warning(
+                            "Skipping HuggingFace file with unsafe path %r: %s",
+                            rfilename,
+                            exc,
+                        )
+                        continue
                     dest.parent.mkdir(parents=True, exist_ok=True)
 
                     # Stream download with progress

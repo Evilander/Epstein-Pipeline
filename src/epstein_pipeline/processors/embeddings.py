@@ -13,6 +13,7 @@ import struct
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import cast
 
 from rich.progress import (
     BarColumn,
@@ -181,7 +182,7 @@ class EmbeddingProcessor:
         )
         if embeddings.shape[1] > self.dimensions:
             embeddings = embeddings[:, : self.dimensions]
-        return embeddings.tolist()
+        return cast(list[list[float]], embeddings.tolist())
 
     def process_batch(
         self,

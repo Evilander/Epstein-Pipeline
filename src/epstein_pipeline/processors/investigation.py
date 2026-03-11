@@ -22,15 +22,13 @@ from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from epstein_pipeline.models.document import Document, Email, Flight, Person
 from epstein_pipeline.processors.knowledge_graph import (
     GraphEdge,
     GraphNode,
     KnowledgeGraph,
-    KnowledgeGraphBuilder,
-    RELATIONSHIP_TYPES,
 )
 
 logger = logging.getLogger(__name__)
@@ -232,9 +230,10 @@ class InvestigationEngine:
         """
         if start not in self._node_map:
             # Try fuzzy match by label
-            start = self._resolve_entity(start)
-            if not start:
+            resolved_start = self._resolve_entity(start)
+            if not resolved_start:
                 return {}
+            start = resolved_start
 
         visited: dict[str, dict[str, Any]] = {
             start: {
@@ -282,7 +281,9 @@ class InvestigationEngine:
             return None
 
         # BFS
-        visited = {source: (None, None)}  # node -> (parent, edge)
+        visited: dict[str, tuple[str | None, GraphEdge | None]] = {
+            source: (None, None)
+        }  # node -> (parent, edge)
         queue = [source]
 
         while queue:
@@ -326,9 +327,7 @@ class InvestigationEngine:
             relationship_types=rel_types,
         )
 
-    def _reconstruct_path(
-        self, visited: dict, source: str, target: str
-    ) -> list[str]:
+    def _reconstruct_path(self, visited: dict, source: str, target: str) -> list[str]:
         """Reconstruct path from BFS visited dict."""
         path = [target]
         current = target
@@ -382,19 +381,23 @@ class InvestigationEngine:
                         internal_count += 1
 
             internal_count //= 2  # undirected, counted twice
-            dominant = internal_edge_types.most_common(1)[0][0] if internal_edge_types else "unknown"
+            dominant = (
+                internal_edge_types.most_common(1)[0][0] if internal_edge_types else "unknown"
+            )
 
             member_labels = {m: self._label(m) for m in members}
 
-            communities.append(Community(
-                id=comm_id,
-                members=members,
-                member_labels=member_labels,
-                size=len(members),
-                internal_edges=internal_count,
-                dominant_relationship=dominant,
-                label=self._auto_label_community(members, dominant),
-            ))
+            communities.append(
+                Community(
+                    id=comm_id,
+                    members=members,
+                    member_labels=member_labels,
+                    size=len(members),
+                    internal_edges=internal_count,
+                    dominant_relationship=dominant,
+                    label=self._auto_label_community(members, dominant),
+                )
+            )
 
         self._communities = communities
         return communities
@@ -415,7 +418,7 @@ class InvestigationEngine:
         for edge in self.graph.edges:
             G.add_edge(edge.source, edge.target, weight=edge.weight, type=edge.type)
 
-        return community_louvain.best_partition(G, resolution=resolution)
+        return cast(dict[str, int], community_louvain.best_partition(G, resolution=resolution))
 
     def _connected_components_partition(self) -> dict[str, int]:
         """Fallback: label connected components as communities."""
@@ -470,9 +473,7 @@ class InvestigationEngine:
         except ImportError:
             # Fallback: degree centrality (connection count / max possible)
             max_degree = max(self._degree_cache.values()) if self._degree_cache else 1
-            self._centrality = {
-                nid: deg / max_degree for nid, deg in self._degree_cache.items()
-            }
+            self._centrality = {nid: deg / max_degree for nid, deg in self._degree_cache.items()}
 
         return self._centrality
 
@@ -480,11 +481,7 @@ class InvestigationEngine:
         """Rank entities by degree, weighted degree, or centrality."""
         profiles = []
         centrality = self.compute_centrality() if by == "centrality" else {}
-        communities = {
-            m: c.id
-            for c in (self._communities or [])
-            for m in c.members
-        }
+        communities = {m: c.id for c in (self._communities or []) for m in c.members}
 
         for node in self.graph.nodes:
             if node.type != "person":
@@ -502,20 +499,22 @@ class InvestigationEngine:
 
             connections.sort(key=lambda x: -x[2])
 
-            profiles.append(EntityProfile(
-                id=node.id,
-                label=self._label(node.id),
-                node_type=node.type,
-                degree=len(neighbors),
-                weighted_degree=weighted_deg,
-                top_connections=connections[:10],
-                community_id=communities.get(node.id),
-                centrality_rank=None,  # filled below
-                edge_type_breakdown=dict(edge_types),
-                document_count=len(self._docs_by_person.get(node.id, [])),
-                flight_count=len(self._flights_by_person.get(node.id, [])),
-                email_count=len(self._emails_by_person.get(node.id, [])),
-            ))
+            profiles.append(
+                EntityProfile(
+                    id=node.id,
+                    label=self._label(node.id),
+                    node_type=node.type,
+                    degree=len(neighbors),
+                    weighted_degree=weighted_deg,
+                    top_connections=connections[:10],
+                    community_id=communities.get(node.id),
+                    centrality_rank=None,  # filled below
+                    edge_type_breakdown=dict(edge_types),
+                    document_count=len(self._docs_by_person.get(node.id, [])),
+                    flight_count=len(self._flights_by_person.get(node.id, [])),
+                    email_count=len(self._emails_by_person.get(node.id, [])),
+                )
+            )
 
         # Sort
         if by == "centrality":
@@ -562,15 +561,17 @@ class InvestigationEngine:
                 for doc in self._all_docs:
                     if id(doc) in common_doc_ids and doc.date:
                         if self._in_date_range(doc.date, date_range):
-                            events.append({
-                                "date": doc.date,
-                                "type": "document",
-                                "id": doc.id,
-                                "title": doc.title,
-                                "source": doc.source,
-                                "category": doc.category,
-                                "persons": doc.personIds,
-                            })
+                            events.append(
+                                {
+                                    "date": doc.date,
+                                    "type": "document",
+                                    "id": doc.id,
+                                    "title": doc.title,
+                                    "source": doc.source,
+                                    "category": doc.category,
+                                    "persons": doc.personIds,
+                                }
+                            )
                             sources["document"] += 1
 
         # Flights where all entities co-appear
@@ -580,15 +581,17 @@ class InvestigationEngine:
                     all_pax = set(flight.passengerIds + flight.pilotIds)
                     if entity_set.issubset(all_pax) and flight.date:
                         if self._in_date_range(flight.date, date_range):
-                            events.append({
-                                "date": flight.date,
-                                "type": "flight",
-                                "id": flight.id,
-                                "origin": flight.origin,
-                                "destination": flight.destination,
-                                "aircraft": flight.aircraft,
-                                "passengers": flight.passengerIds,
-                            })
+                            events.append(
+                                {
+                                    "date": flight.date,
+                                    "type": "flight",
+                                    "id": flight.id,
+                                    "origin": flight.origin,
+                                    "destination": flight.destination,
+                                    "aircraft": flight.aircraft,
+                                    "passengers": flight.passengerIds,
+                                }
+                            )
                             sources["flight"] += 1
                 break  # only need to check one entity's flights
 
@@ -598,13 +601,15 @@ class InvestigationEngine:
                 for email in self._emails_by_person.get(eid, []):
                     if entity_set.issubset(set(email.personIds)) and email.date:
                         if self._in_date_range(email.date, date_range):
-                            events.append({
-                                "date": email.date,
-                                "type": "email",
-                                "id": email.id,
-                                "subject": email.subject,
-                                "persons": email.personIds,
-                            })
+                            events.append(
+                                {
+                                    "date": email.date,
+                                    "type": "email",
+                                    "id": email.id,
+                                    "subject": email.subject,
+                                    "persons": email.personIds,
+                                }
+                            )
                             sources["email"] += 1
                 break
 
@@ -695,19 +700,21 @@ class InvestigationEngine:
         common.discard(person_a)
         common.discard(person_b)
 
-        connectors = []
+        connectors: list[dict[str, Any]] = []
         for cid in common:
-            connectors.append({
-                "id": cid,
-                "label": self._label(cid),
-                "weight_to_a": neighbors_a[cid].weight,
-                "weight_to_b": neighbors_b[cid].weight,
-                "combined_weight": neighbors_a[cid].weight + neighbors_b[cid].weight,
-                "rel_to_a": neighbors_a[cid].type,
-                "rel_to_b": neighbors_b[cid].type,
-            })
+            connectors.append(
+                {
+                    "id": cid,
+                    "label": self._label(cid),
+                    "weight_to_a": neighbors_a[cid].weight,
+                    "weight_to_b": neighbors_b[cid].weight,
+                    "combined_weight": neighbors_a[cid].weight + neighbors_b[cid].weight,
+                    "rel_to_a": neighbors_a[cid].type,
+                    "rel_to_b": neighbors_b[cid].type,
+                }
+            )
 
-        connectors.sort(key=lambda c: -c["combined_weight"])
+        connectors.sort(key=lambda c: -float(c["combined_weight"]))
         return connectors
 
     # ------------------------------------------------------------------
@@ -757,7 +764,7 @@ class InvestigationEngine:
     def search_entities(self, query: str, limit: int = 20) -> list[dict[str, Any]]:
         """Search for entities by name (fuzzy)."""
         query_lower = query.lower()
-        results = []
+        results: list[dict[str, Any]] = []
 
         for node in self.graph.nodes:
             score = 0
@@ -769,13 +776,15 @@ class InvestigationEngine:
                 score = 60
 
             if score > 0:
-                results.append({
-                    "id": node.id,
-                    "label": node.label,
-                    "type": node.type,
-                    "degree": self._degree_cache.get(node.id, 0),
-                    "score": score,
-                })
+                results.append(
+                    {
+                        "id": node.id,
+                        "label": node.label,
+                        "type": node.type,
+                        "degree": self._degree_cache.get(node.id, 0),
+                        "score": score,
+                    }
+                )
 
         # Also search person registry
         for pid, person in self._persons.items():
@@ -793,15 +802,17 @@ class InvestigationEngine:
                     score = max(score, 50)
 
             if score > 0:
-                results.append({
-                    "id": pid,
-                    "label": person.name,
-                    "type": "person",
-                    "degree": self._degree_cache.get(pid, 0),
-                    "score": score,
-                })
+                results.append(
+                    {
+                        "id": pid,
+                        "label": person.name,
+                        "type": "person",
+                        "degree": self._degree_cache.get(pid, 0),
+                        "score": score,
+                    }
+                )
 
-        results.sort(key=lambda r: (-r["score"], -r["degree"]))
+        results.sort(key=lambda r: (-int(r["score"]), -int(r["degree"])))
         return results[:limit]
 
     # ------------------------------------------------------------------
@@ -842,10 +853,7 @@ class InvestigationEngine:
                     "label": c.label,
                     "dominant_relationship": c.dominant_relationship,
                     "internal_edges": c.internal_edges,
-                    "members": [
-                        {"id": m, "label": c.member_labels.get(m, m)}
-                        for m in c.members
-                    ],
+                    "members": [{"id": m, "label": c.member_labels.get(m, m)} for m in c.members],
                 }
                 for c in communities
             ],
@@ -859,13 +867,25 @@ class InvestigationEngine:
         """Export top entities by multiple ranking criteria."""
         data = {
             "by_degree": [
-                {"rank": p.centrality_rank, "id": p.id, "label": p.label,
-                 "degree": p.degree, "docs": p.document_count, "flights": p.flight_count}
+                {
+                    "rank": p.centrality_rank,
+                    "id": p.id,
+                    "label": p.label,
+                    "degree": p.degree,
+                    "docs": p.document_count,
+                    "flights": p.flight_count,
+                }
                 for p in self.top_entities(n, by="degree")
             ],
             "by_centrality": [
-                {"rank": p.centrality_rank, "id": p.id, "label": p.label,
-                 "degree": p.degree, "docs": p.document_count, "flights": p.flight_count}
+                {
+                    "rank": p.centrality_rank,
+                    "id": p.id,
+                    "label": p.label,
+                    "degree": p.degree,
+                    "docs": p.document_count,
+                    "flights": p.flight_count,
+                }
                 for p in self.top_entities(n, by="centrality")
             ],
             "generated": datetime.now().isoformat(),
@@ -905,9 +925,7 @@ class InvestigationREPL:
         """Start the interactive REPL."""
         try:
             from rich.console import Console
-            from rich.table import Table
-            from rich.panel import Panel
-            from rich.text import Text
+
             self._console = Console()
             self._rich = True
         except ImportError:
@@ -969,9 +987,11 @@ class InvestigationREPL:
                 "[dim]Type 'help' for commands[/dim]"
             )
         else:
-            print(f"\n=== Epstein Investigation Engine ===")
-            print(f"Graph: {self.engine.graph.node_count} entities, "
-                  f"{self.engine.graph.edge_count} connections")
+            print("\n=== Epstein Investigation Engine ===")
+            print(
+                f"Graph: {self.engine.graph.node_count} entities, "
+                f"{self.engine.graph.edge_count} connections"
+            )
             print("Type 'help' for commands")
 
     def _print_help(self) -> None:
@@ -991,6 +1011,7 @@ class InvestigationREPL:
         ]
         if self._rich:
             from rich.table import Table
+
             table = Table(title="Investigation Commands", show_header=True)
             table.add_column("Command", style="cyan")
             table.add_column("Description")
@@ -1012,6 +1033,7 @@ class InvestigationREPL:
             return
         if self._rich:
             from rich.table import Table
+
             table = Table(title=f"Search: {query}")
             table.add_column("ID", style="dim")
             table.add_column("Name", style="bold")
@@ -1104,6 +1126,7 @@ class InvestigationREPL:
 
         if self._rich:
             from rich.tree import Tree
+
             tree = Tree(f"[bold]{self.engine._label(entity)}[/bold] ({len(result)} reachable)")
             for dist in sorted(by_distance.keys()):
                 if dist == 0:
@@ -1124,7 +1147,7 @@ class InvestigationREPL:
     def _cmd_path(self, args: list[str]) -> None:
         # Parse "A to B" or "A B"
         text = " ".join(args)
-        parts = re.split(r'\s+to\s+|\s+and\s+', text, maxsplit=1)
+        parts = re.split(r"\s+to\s+|\s+and\s+", text, maxsplit=1)
         if len(parts) < 2:
             # Try splitting on last space-separated token
             if len(args) >= 2:
@@ -1141,20 +1164,22 @@ class InvestigationREPL:
         labels = [self.engine._label(h) for h in result.hops]
         if self._rich:
             chain = " → ".join(
-                f"[bold]{l}[/bold]" if i == 0 or i == len(labels) - 1 else l
-                for i, l in enumerate(labels)
+                f"[bold]{label}[/bold]" if i == 0 or i == len(labels) - 1 else label
+                for i, label in enumerate(labels)
             )
-            self._console.print(f"\n  Path ({len(result.hops) - 1} hops, weight {result.total_weight:.1f}):")
+            self._console.print(
+                f"\n  Path ({len(result.hops) - 1} hops, weight {result.total_weight:.1f}):"
+            )
             self._console.print(f"  {chain}")
             for i, edge in enumerate(result.edges):
-                self._console.print(f"    [dim]{labels[i]} —[{edge.type}]→ {labels[i+1]}[/dim]")
+                self._console.print(f"    [dim]{labels[i]} —[{edge.type}]→ {labels[i + 1]}[/dim]")
         else:
             print(f"\n  Path ({len(result.hops) - 1} hops):")
             print(f"  {' → '.join(labels)}")
 
     def _cmd_shared(self, args: list[str]) -> None:
         text = " ".join(args)
-        parts = re.split(r'\s+and\s+|\s+with\s+', text, maxsplit=1)
+        parts = re.split(r"\s+and\s+|\s+with\s+", text, maxsplit=1)
         if len(parts) < 2:
             print("Usage: shared <entity1> and <entity2>")
             return
@@ -1178,7 +1203,7 @@ class InvestigationREPL:
 
     def _cmd_connects(self, args: list[str]) -> None:
         text = " ".join(args)
-        parts = re.split(r'\s+and\s+|\s+to\s+', text, maxsplit=1)
+        parts = re.split(r"\s+and\s+|\s+to\s+", text, maxsplit=1)
         if len(parts) < 2:
             print("Usage: connects <entity1> and <entity2>")
             return
@@ -1190,28 +1215,34 @@ class InvestigationREPL:
 
         print(f"\n  Connectors between {parts[0].strip()} and {parts[1].strip()}:")
         for c in connectors[:15]:
-            print(f"    {c['label']:<30} "
-                  f"[{c['rel_to_a']}] w={c['weight_to_a']:.1f} | "
-                  f"[{c['rel_to_b']}] w={c['weight_to_b']:.1f}")
+            print(
+                f"    {c['label']:<30} "
+                f"[{c['rel_to_a']}] w={c['weight_to_a']:.1f} | "
+                f"[{c['rel_to_b']}] w={c['weight_to_b']:.1f}"
+            )
 
     def _cmd_timeline(self, args: list[str]) -> None:
         text = " ".join(args)
-        entities = [e.strip() for e in re.split(r'\s+and\s+|,', text) if e.strip()]
+        entities = [e.strip() for e in re.split(r"\s+and\s+|,", text) if e.strip()]
         if not entities:
             print("Usage: timeline <entity> [and <entity2>]")
             return
 
         thread = self.engine.temporal_thread(entities)
         print(f"\n  Timeline: {', '.join(self.engine._label(e) for e in thread.entity_ids)}")
-        print(f"  {thread.total_mentions} events, "
-              f"range: {thread.date_range[0] or '?'} to {thread.date_range[1] or '?'}")
+        print(
+            f"  {thread.total_mentions} events, "
+            f"range: {thread.date_range[0] or '?'} to {thread.date_range[1] or '?'}"
+        )
         print(f"  Sources: {thread.sources_breakdown}")
 
         for ev in thread.events[:30]:
             if ev["type"] == "document":
                 print(f"    [{ev['date']}] DOC: {ev['title'][:55]} ({ev['source']})")
             elif ev["type"] == "flight":
-                print(f"    [{ev['date']}] FLT: {ev.get('origin','?')} → {ev.get('destination','?')}")
+                print(
+                    f"    [{ev['date']}] FLT: {ev.get('origin', '?')} → {ev.get('destination', '?')}"
+                )
             elif ev["type"] == "email":
                 print(f"    [{ev['date']}] EMAIL: {ev['subject'][:55]}")
 
@@ -1238,6 +1269,7 @@ class InvestigationREPL:
         profiles = self.engine.top_entities(n, by=by)
         if self._rich:
             from rich.table import Table
+
             table = Table(title=f"Top {n} Entities (by {by})")
             table.add_column("#", justify="right", style="dim")
             table.add_column("Name", style="bold")
@@ -1246,15 +1278,20 @@ class InvestigationREPL:
             table.add_column("Flights", justify="right")
             for p in profiles:
                 table.add_row(
-                    str(p.centrality_rank), p.label,
-                    str(p.degree), str(p.document_count), str(p.flight_count)
+                    str(p.centrality_rank),
+                    p.label,
+                    str(p.degree),
+                    str(p.document_count),
+                    str(p.flight_count),
                 )
             self._console.print(table)
         else:
             print(f"\n  Top {n} entities by {by}:")
             for p in profiles:
-                print(f"    {p.centrality_rank:>3}. {p.label:<30} "
-                      f"deg={p.degree} docs={p.document_count} flights={p.flight_count}")
+                print(
+                    f"    {p.centrality_rank:>3}. {p.label:<30} "
+                    f"deg={p.degree} docs={p.document_count} flights={p.flight_count}"
+                )
 
     def _cmd_export(self, args: list[str]) -> None:
         if len(args) < 2:

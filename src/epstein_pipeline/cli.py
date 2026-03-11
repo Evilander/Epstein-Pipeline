@@ -3,21 +3,51 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 import sys
+from datetime import datetime, timezone
+from importlib.util import find_spec
 from pathlib import Path
+from platform import python_version
+from typing import Any
+from urllib.parse import urlsplit, urlunsplit
 
 import click
 from rich.console import Console
 from rich.table import Table
 
+from epstein_pipeline import __version__
 from epstein_pipeline.config import Settings
 
 console = Console()
+banner_console = Console(stderr=True)
 
 BANNER = """
 [bold cyan]Epstein Pipeline[/bold cyan] - Open Source Document Processing & Investigation
 [dim]https://github.com/evilander/Epstein-Pipeline[/dim]
 """
+
+OPTIONAL_DEPENDENCIES = (
+    ("docling", "ocr"),
+    ("surya", "ocr-surya"),
+    ("olmocr", "ocr-gpu"),
+    ("fitz", "pymupdf"),
+    ("spacy", "nlp"),
+    ("gliner", "nlp-gliner"),
+    ("openai", "ai"),
+    ("PIL", "vision"),
+    ("faster_whisper", "transcription"),
+    ("sentence_transformers", "embeddings"),
+    ("psycopg", "neon"),
+    ("pgvector", "neon"),
+    ("transformers", "classify"),
+    ("anthropic", "audit"),
+    ("voyageai", "audit"),
+    ("cohere", "audit"),
+    ("SPARQLWrapper", "audit"),
+    ("networkx", "investigate"),
+    ("community", "investigate"),
+)
 
 
 def _load_settings() -> Settings:
@@ -27,14 +57,271 @@ def _load_settings() -> Settings:
     return settings
 
 
+def _module_available(module_name: str) -> bool:
+    """Return whether an optional module is importable."""
+    return find_spec(module_name) is not None
+
+
+def _mask_database_url(url: str | None) -> str | None:
+    """Mask password material in a database URL for logs and status output."""
+    if not url:
+        return None
+
+    parsed = urlsplit(url)
+    if not parsed.password:
+        return url
+
+    username = parsed.username or ""
+    hostname = parsed.hostname or ""
+    port = f":{parsed.port}" if parsed.port else ""
+    netloc = f"{username}:***@{hostname}{port}"
+    return urlunsplit((parsed.scheme, netloc, parsed.path, parsed.query, parsed.fragment))
+
+
+def build_status_report(settings: Settings, *, check_database: bool = False) -> dict[str, Any]:
+    """Build a machine-readable health report for operator checks."""
+    settings.ensure_dirs()
+
+    issues: list[str] = []
+    warnings: list[str] = []
+    runtime = settings.runtime_summary()
+    path_report = runtime["paths"]
+    registry_report = runtime["persons_registry"]
+
+    for name, entry in path_report.items():
+        if name != "persons_registry" and not entry["writable"]:
+            issues.append(f"{name} is not writable: {entry['path']}")
+
+    if not registry_report["exists"]:
+        issues.append(
+            "Required persons registry is missing. Set EPSTEIN_PERSONS_REGISTRY_PATH or "
+            "restore data/persons-registry.json."
+        )
+    elif registry_report["using_bundled_fallback"]:
+        warnings.append(
+            "Using bundled persons registry fallback because the configured runtime path "
+            "does not exist."
+        )
+
+    state_db_path = settings.cache_dir / "pipeline_state.db"
+    state_counts: dict[str, int] = {}
+    state_error: str | None = None
+    if state_db_path.exists():
+        try:
+            from epstein_pipeline.state import ProcessingState
+
+            state = ProcessingState(state_db_path)
+            try:
+                state_counts = state.get_stats()
+            finally:
+                state.close()
+        except sqlite3.Error as exc:
+            state_error = str(exc)
+            issues.append(f"State database is unreadable: {exc}")
+
+    optional_report = [
+        {
+            "module": module_name,
+            "feature": feature_name,
+            "installed": _module_available(module_name),
+        }
+        for module_name, feature_name in OPTIONAL_DEPENDENCIES
+    ]
+
+    database_report: dict[str, Any] = {
+        "configured": bool(settings.neon_database_url),
+        "checked": check_database,
+        "reachable": None,
+        "masked_url": _mask_database_url(settings.neon_database_url),
+    }
+    if settings.neon_database_url and check_database:
+        if not _module_available("psycopg"):
+            database_report["reachable"] = False
+            warnings.append("Database reachability check skipped because psycopg is not installed.")
+        else:
+            try:
+                import psycopg
+
+                with psycopg.connect(settings.neon_database_url, connect_timeout=5) as conn:
+                    with conn.cursor() as cur:
+                        cur.execute("SELECT 1")
+                        cur.fetchone()
+                database_report["reachable"] = True
+            except Exception as exc:
+                database_report["reachable"] = False
+                issues.append(f"Database reachability check failed: {exc}")
+
+    return {
+        "name": "epstein-pipeline",
+        "version": __version__,
+        "healthy": not issues,
+        "checked_at": datetime.now(timezone.utc).isoformat(),
+        "python_version": python_version(),
+        "issues": issues,
+        "warnings": warnings,
+        "paths": path_report,
+        "persons_registry": registry_report,
+        "state": {
+            "db_path": str(state_db_path.resolve()),
+            "exists": state_db_path.exists(),
+            "read_error": state_error,
+            "stage_counts": state_counts,
+        },
+        "database": database_report,
+        "config": {
+            "max_workers": settings.max_workers,
+            "ocr_backend": settings.ocr_backend.value,
+            "ner_backend": settings.ner_backend.value,
+            "dedup_mode": settings.dedup_mode.value,
+            "neon_configured": runtime["env"]["neon_database_url"],
+            "opensanctions_configured": runtime["env"]["opensanctions_api_key"],
+            "auditor_configured": runtime["env"]["auditor_anthropic_api_key"],
+        },
+        "optional_dependencies": optional_report,
+    }
+
+
+def _load_documents_from_dir(input_dir: Path) -> tuple[list[Any], list[tuple[str, str]]]:
+    """Load Document models from a directory of pipeline JSON outputs."""
+    from epstein_pipeline.models.document import Document, ProcessingResult
+
+    documents: list[Document] = []
+    skipped: list[tuple[str, str]] = []
+    for json_file in sorted(input_dir.rglob("*.json")):
+        try:
+            raw = json.loads(json_file.read_text(encoding="utf-8"))
+            if "document" in raw and raw["document"] is not None:
+                result = ProcessingResult.model_validate(raw)
+                if result.document:
+                    documents.append(result.document)
+            elif "id" in raw and "title" in raw:
+                documents.append(Document.model_validate(raw))
+            else:
+                skipped.append((json_file.name, "Unrecognised schema"))
+        except Exception as exc:
+            skipped.append((json_file.name, str(exc)))
+    return documents, skipped
+
+
+def _export_documents(
+    *,
+    format_name: str,
+    input_dir: Path,
+    output: Path | None,
+    settings: Settings,
+    database_url: str | None = None,
+    batch_size: int = 100,
+) -> None:
+    """Export documents to the requested output format."""
+    documents, skipped = _load_documents_from_dir(input_dir)
+    if skipped:
+        console.print(
+            f"[red]Export aborted: {len(skipped)} invalid JSON file(s) were found in {input_dir}.[/red]"
+        )
+        error_table = Table(title="Invalid Export Inputs", show_lines=True)
+        error_table.add_column("File", style="cyan")
+        error_table.add_column("Reason", style="red")
+        for name, reason in skipped[:20]:
+            error_table.add_row(name, reason)
+        console.print(error_table)
+        raise SystemExit(1)
+
+    if not documents:
+        console.print("[yellow]No documents found to export.[/yellow]")
+        return
+
+    console.print(f"Exporting [bold]{len(documents)}[/bold] documents as {format_name.upper()}")
+
+    if format_name == "json":
+        out_path = output or settings.output_dir / "export.json"
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        data = [document.model_dump(exclude_none=True) for document in documents]
+        out_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+        console.print(f"[green]Exported to {out_path}[/green]")
+        return
+
+    if format_name == "csv":
+        import csv
+
+        out_path = output or settings.output_dir / "export.csv"
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        fieldnames = [
+            "id",
+            "title",
+            "date",
+            "source",
+            "category",
+            "summary",
+            "personIds",
+            "tags",
+            "pdfUrl",
+            "pageCount",
+            "batesRange",
+        ]
+        with open(out_path, "w", newline="", encoding="utf-8") as handle:
+            writer = csv.DictWriter(handle, fieldnames=fieldnames, extrasaction="ignore")
+            writer.writeheader()
+            for document in documents:
+                row = document.model_dump(exclude_none=True, exclude={"ocrText"})
+                if "personIds" in row:
+                    row["personIds"] = ";".join(row["personIds"])
+                if "tags" in row:
+                    row["tags"] = ";".join(row["tags"])
+                writer.writerow(row)
+        console.print(f"[green]Exported to {out_path}[/green]")
+        return
+
+    if format_name == "sqlite":
+        from epstein_pipeline.exporters.sqlite_export import SqliteExporter
+        from epstein_pipeline.models.document import Person
+
+        out_path = output or settings.output_dir / "epstein.db"
+        persons: list[Person] = []
+        if any(document.personIds for document in documents):
+            registry_path = settings.resolve_persons_registry_path()
+            if not registry_path.exists():
+                console.print(
+                    "[red]SQLite export requires a persons registry because document-person links "
+                    "are present in the input set.[/red]"
+                )
+                raise SystemExit(1)
+            raw_persons = json.loads(registry_path.read_text(encoding="utf-8"))
+            persons = [Person.model_validate(entry) for entry in raw_persons]
+        exporter = SqliteExporter()
+        exporter.export(documents=documents, persons=persons, db_path=out_path)
+        console.print(f"[green]Exported to {out_path}[/green]")
+        return
+
+    if format_name == "neon":
+        import asyncio
+
+        if not database_url:
+            console.print(
+                "[red]Neon export requires --database-url or EPSTEIN_NEON_DATABASE_URL.[/red]"
+            )
+            raise SystemExit(1)
+
+        from epstein_pipeline.exporters.neon_export import NeonExporter
+
+        settings.neon_database_url = database_url
+        settings.neon_batch_size = batch_size
+        neon_exporter = NeonExporter(settings)
+        asyncio.run(neon_exporter.upsert_documents(documents))
+        console.print("[green]Export complete.[/green]")
+        return
+
+    raise ValueError(f"Unsupported export format: {format_name}")
+
+
 # ---------------------------------------------------------------------------
 # Top-level group
 # ---------------------------------------------------------------------------
 
 
 @click.group()
-@click.version_option(package_name="epstein-pipeline")
-def cli() -> None:
+@click.version_option(version=__version__)
+@click.pass_context
+def cli(ctx: click.Context) -> None:
     """Epstein Pipeline -- Open Source Document Processing & Investigation.
 
     Process, OCR, deduplicate, investigate, and export Epstein case file documents.
@@ -42,7 +329,97 @@ def cli() -> None:
     \b
     https://github.com/evilander/Epstein-Pipeline
     """
-    console.print(BANNER)
+    return None
+
+
+# ---------------------------------------------------------------------------
+# status
+# ---------------------------------------------------------------------------
+
+
+@cli.command()
+@click.option("--json", "json_output", is_flag=True, help="Emit machine-readable JSON.")
+@click.option(
+    "--fail-on-unhealthy",
+    is_flag=True,
+    help="Exit with code 1 when a required health check fails.",
+)
+@click.option(
+    "--check-database",
+    is_flag=True,
+    help="Attempt a live database ping when EPSTEIN_NEON_DATABASE_URL is configured.",
+)
+def status(json_output: bool, fail_on_unhealthy: bool, check_database: bool) -> None:
+    """Report runtime health, configuration, and optional dependency availability."""
+    report = build_status_report(_load_settings(), check_database=check_database)
+
+    if json_output:
+        click.echo(json.dumps(report, indent=2))
+    else:
+        health_color = "green" if report["healthy"] else "red"
+        health_label = "HEALTHY" if report["healthy"] else "UNHEALTHY"
+        console.print(
+            f"[bold {health_color}]{health_label}[/bold {health_color}] "
+            f"epstein-pipeline {report['version']} on Python {report['python_version']}"
+        )
+
+        if report["issues"]:
+            for issue in report["issues"]:
+                console.print(f"  [red]-[/red] {issue}")
+        if report["warnings"]:
+            for warning in report["warnings"]:
+                console.print(f"  [yellow]-[/yellow] {warning}")
+
+        path_table = Table(title="Paths")
+        path_table.add_column("Path", style="cyan")
+        path_table.add_column("Resolved")
+        path_table.add_column("Exists", justify="right")
+        path_table.add_column("Writable", justify="right")
+        for name, entry in report["paths"].items():
+            path_table.add_row(
+                name,
+                str(entry["path"]),
+                "yes" if entry["exists"] else "no",
+                "yes" if entry["writable"] else "no",
+            )
+        console.print(path_table)
+
+        state_report = report["state"]
+        state_status = "present" if state_report["exists"] else "not created yet"
+        console.print(f"State DB: [cyan]{state_report['db_path']}[/cyan] ({state_status})")
+        if state_report["read_error"]:
+            console.print(f"[red]State DB error:[/red] {state_report['read_error']}")
+        elif state_report["stage_counts"]:
+            state_table = Table(title="Stage Counts")
+            state_table.add_column("Stage", style="cyan")
+            state_table.add_column("Count", justify="right")
+            for stage, count in sorted(state_report["stage_counts"].items()):
+                state_table.add_row(stage, str(count))
+            console.print(state_table)
+
+        database_report = report["database"]
+        if database_report["configured"]:
+            db_status = "configured"
+            if check_database:
+                db_status = "reachable" if database_report["reachable"] else "unreachable"
+            console.print(f"Database: [cyan]{database_report['masked_url']}[/cyan] ({db_status})")
+        elif check_database:
+            console.print("Database: [yellow]not configured[/yellow]")
+
+        optional_table = Table(title="Optional Dependencies")
+        optional_table.add_column("Module", style="cyan")
+        optional_table.add_column("Feature")
+        optional_table.add_column("Installed", justify="right")
+        for entry in report["optional_dependencies"]:
+            optional_table.add_row(
+                str(entry["module"]),
+                str(entry["feature"]),
+                "yes" if entry["installed"] else "no",
+            )
+        console.print(optional_table)
+
+    if fail_on_unhealthy and not report["healthy"]:
+        raise SystemExit(1)
 
 
 # ---------------------------------------------------------------------------
@@ -108,38 +485,15 @@ def export_neon(input_dir: Path, database_url: str, batch_size: int) -> None:
       epstein-pipeline export-neon ./output/entities --database-url postgresql://...
       EPSTEIN_NEON_DATABASE_URL=... epstein-pipeline export-neon ./output/entities
     """
-    import asyncio
-
-    from epstein_pipeline.exporters.neon_export import NeonExporter
-    from epstein_pipeline.models.document import Document, ProcessingResult
-
     settings = _load_settings()
-    settings.neon_database_url = database_url
-    settings.neon_batch_size = batch_size
-
-    json_files = sorted(input_dir.rglob("*.json"))
-    documents: list[Document] = []
-    for jf in json_files:
-        try:
-            raw = json.loads(jf.read_text(encoding="utf-8"))
-            if "document" in raw and raw["document"] is not None:
-                result = ProcessingResult.model_validate(raw)
-                if result.document:
-                    documents.append(result.document)
-            elif "id" in raw and "title" in raw:
-                documents.append(Document.model_validate(raw))
-        except Exception:
-            continue
-
-    if not documents:
-        console.print("[yellow]No documents found to export.[/yellow]")
-        return
-
-    console.print(f"Exporting [bold]{len(documents)}[/bold] documents to Neon Postgres")
-
-    exporter = NeonExporter(settings)
-    asyncio.run(exporter.upsert_documents(documents))
-    console.print("[green]Export complete.[/green]")
+    _export_documents(
+        format_name="neon",
+        input_dir=input_dir,
+        output=None,
+        settings=settings,
+        database_url=database_url,
+        batch_size=batch_size,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -232,15 +586,35 @@ def search(query: str, database_url: str, limit: int, threshold: float) -> None:
     """
     import asyncio
 
-    from epstein_pipeline.exporters.neon_export import NeonExporter
+    try:
+        from epstein_pipeline.exporters.neon_export import NeonExporter
+        from epstein_pipeline.processors.embeddings import EmbeddingProcessor
+    except ImportError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise SystemExit(1) from exc
 
     settings = _load_settings()
     settings.neon_database_url = database_url
 
     console.print(f'Searching for: [bold cyan]"{query}"[/bold cyan]')
 
-    exporter = NeonExporter(settings)
-    results = asyncio.run(exporter.semantic_search(query, limit=limit, threshold=threshold))
+    try:
+        exporter = NeonExporter(settings)
+        embedder = EmbeddingProcessor(
+            settings,
+            dimensions=settings.embedding_dimensions,
+            batch_size=1,
+        )
+        query_embedding = embedder.embed_texts([query])[0]
+        results = asyncio.run(
+            exporter.semantic_search(query_embedding, top_k=limit, threshold=threshold)
+        )
+    except ImportError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise SystemExit(1) from exc
+    except Exception as exc:
+        console.print(f"[red]Semantic search failed: {exc}[/red]")
+        raise SystemExit(1) from exc
 
     if not results:
         console.print("[yellow]No results found.[/yellow]")
@@ -254,10 +628,10 @@ def search(query: str, database_url: str, limit: int, threshold: float) -> None:
 
     for r in results:
         table.add_row(
-            r["document_id"],
-            str(r["chunk_index"]),
-            f"{r['similarity']:.2%}",
-            r["chunk_text"][:100] + "...",
+            r.document_id,
+            str(r.chunk_index),
+            f"{r.similarity:.2%}",
+            r.chunk_text[:100] + "...",
         )
 
     console.print(table)
@@ -269,11 +643,20 @@ def search(query: str, database_url: str, limit: int, threshold: float) -> None:
 
 
 @cli.command()
-@click.argument("source", type=click.Choice(["doj", "kaggle", "huggingface", "archive", "ghostcrawl"]))
+@click.argument(
+    "source", type=click.Choice(["doj", "kaggle", "huggingface", "archive", "ghostcrawl"])
+)
 @click.option(
     "--output", "-o", type=click.Path(path_type=Path), default=None, help="Output directory."
 )
-def download(source: str, output: Path | None) -> None:
+@click.option("--dataset", type=int, default=None, help="DOJ dataset number (1-12).")
+@click.option(
+    "--list-datasets",
+    is_flag=True,
+    default=False,
+    help="List DOJ datasets instead of downloading them.",
+)
+def download(source: str, output: Path | None, dataset: int | None, list_datasets: bool) -> None:
     """Download documents from a supported source.
 
     SOURCE must be one of: doj, kaggle, huggingface, archive, ghostcrawl.
@@ -283,7 +666,7 @@ def download(source: str, output: Path | None) -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
 
     if source == "doj":
-        _download_doj(out_dir)
+        _download_doj(out_dir, dataset_num=dataset, list_datasets=list_datasets)
     elif source == "kaggle":
         _download_kaggle(out_dir)
     elif source == "huggingface":
@@ -294,10 +677,21 @@ def download(source: str, output: Path | None) -> None:
         _download_ghostcrawl(out_dir)
 
 
-def _download_doj(out_dir: Path) -> None:
+def _download_doj(
+    out_dir: Path,
+    *,
+    dataset_num: int | None = None,
+    list_datasets: bool = False,
+) -> None:
     from epstein_pipeline.downloaders.doj import DojDownloader
 
     dl = DojDownloader()
+    if list_datasets:
+        dl.list_datasets()
+        return
+    if dataset_num is not None:
+        dl.download(dataset_num, out_dir)
+        return
     dl.download_all(out_dir)
 
 
@@ -462,7 +856,7 @@ def extract_entities(
     settings = _load_settings()
     out_dir = output or settings.output_dir / "entities"
     out_dir.mkdir(parents=True, exist_ok=True)
-    registry_path = registry or settings.persons_registry_path
+    registry_path = registry or settings.resolve_persons_registry_path()
 
     if not registry_path.exists():
         console.print(f"[red]Person registry not found at {registry_path}[/red]")
@@ -607,16 +1001,16 @@ def dedup(
 
 
 @cli.command()
-@click.argument("input_dir", type=click.Path(exists=True, file_okay=False, path_type=Path))
-def validate(input_dir: Path) -> None:
-    """Validate JSON files against the Document schema."""
+@click.argument("input_path", type=click.Path(exists=True, path_type=Path))
+def validate(input_path: Path) -> None:
+    """Validate a JSON file or every JSON file under a directory."""
     from pydantic import ValidationError
 
     from epstein_pipeline.models.document import Document, ProcessingResult
 
-    json_files = sorted(input_dir.rglob("*.json"))
+    json_files = [input_path] if input_path.is_file() else sorted(input_path.rglob("*.json"))
     if not json_files:
-        console.print(f"[yellow]No JSON files found in {input_dir}[/yellow]")
+        console.print(f"[yellow]No JSON files found in {input_path}[/yellow]")
         return
 
     console.print(f"Validating [bold]{len(json_files)}[/bold] JSON files...")
@@ -645,8 +1039,11 @@ def validate(input_dir: Path) -> None:
             valid += 1
         except ValidationError as exc:
             invalid += 1
-            first_error = exc.errors()[0] if exc.errors() else {"msg": str(exc)}
-            errors_log.append((jf.name, f"Validation: {first_error.get('msg', str(first_error))}"))
+            if exc.errors():
+                message = exc.errors()[0].get("msg", str(exc))
+            else:
+                message = str(exc)
+            errors_log.append((jf.name, f"Validation: {message}"))
 
     console.print(f"\n  [green]Valid:[/green]   {valid}")
     console.print(f"  [red]Invalid:[/red] {invalid}")
@@ -666,82 +1063,38 @@ def validate(input_dir: Path) -> None:
 
 
 @cli.command()
-@click.argument("format", type=click.Choice(["json", "csv", "sqlite"]))
+@click.argument("format", type=click.Choice(["json", "csv", "sqlite", "neon"]))
 @click.argument("input_dir", type=click.Path(exists=True, file_okay=False, path_type=Path))
 @click.option("--output", "-o", type=click.Path(path_type=Path), default=None)
-def export(format: str, input_dir: Path, output: Path | None) -> None:
-    """Export processed documents to JSON, CSV, or SQLite."""
+@click.option(
+    "--database-url",
+    envvar="EPSTEIN_NEON_DATABASE_URL",
+    default=None,
+    help="Required when format is neon.",
+)
+@click.option(
+    "--batch-size",
+    type=int,
+    default=100,
+    help="Rows per upsert batch when format is neon.",
+)
+def export(
+    format: str,
+    input_dir: Path,
+    output: Path | None,
+    database_url: str | None,
+    batch_size: int,
+) -> None:
+    """Export processed documents to JSON, CSV, SQLite, or Neon Postgres."""
     settings = _load_settings()
-
-    from epstein_pipeline.models.document import Document, ProcessingResult
-
-    json_files = sorted(input_dir.rglob("*.json"))
-    if not json_files:
-        console.print(f"[yellow]No JSON files found in {input_dir}[/yellow]")
-        return
-
-    documents: list[Document] = []
-    for jf in json_files:
-        try:
-            raw = json.loads(jf.read_text(encoding="utf-8"))
-            if "document" in raw and raw["document"] is not None:
-                result = ProcessingResult.model_validate(raw)
-                if result.document:
-                    documents.append(result.document)
-            elif "id" in raw and "title" in raw:
-                documents.append(Document.model_validate(raw))
-        except Exception:
-            continue
-
-    if not documents:
-        console.print("[yellow]No valid documents found.[/yellow]")
-        return
-
-    console.print(f"Exporting [bold]{len(documents)}[/bold] documents as {format.upper()}")
-
-    if format == "json":
-        out_path = output or settings.output_dir / "export.json"
-        out_path.parent.mkdir(parents=True, exist_ok=True)
-        data = [d.model_dump(exclude_none=True) for d in documents]
-        out_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
-        console.print(f"[green]Exported to {out_path}[/green]")
-
-    elif format == "csv":
-        import csv
-
-        out_path = output or settings.output_dir / "export.csv"
-        out_path.parent.mkdir(parents=True, exist_ok=True)
-        fieldnames = [
-            "id",
-            "title",
-            "date",
-            "source",
-            "category",
-            "summary",
-            "personIds",
-            "tags",
-            "pdfUrl",
-            "pageCount",
-            "batesRange",
-        ]
-        with open(out_path, "w", newline="", encoding="utf-8") as f:
-            writer = csv.DictWriter(f, fieldnames=fieldnames, extrasaction="ignore")
-            writer.writeheader()
-            for doc in documents:
-                row = doc.model_dump(exclude_none=True, exclude={"ocrText"})
-                if "personIds" in row:
-                    row["personIds"] = ";".join(row["personIds"])
-                if "tags" in row:
-                    row["tags"] = ";".join(row["tags"])
-                writer.writerow(row)
-        console.print(f"[green]Exported to {out_path}[/green]")
-
-    elif format == "sqlite":
-        from epstein_pipeline.exporters.sqlite_export import SqliteExporter
-
-        out_path = output or settings.output_dir / "epstein.db"
-        exporter = SqliteExporter()
-        exporter.export(documents=documents, persons=[], db_path=out_path)
+    _export_documents(
+        format_name=format,
+        input_dir=input_dir,
+        output=output,
+        settings=settings,
+        database_url=database_url,
+        batch_size=batch_size,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1074,7 +1427,9 @@ def import_ghostcrawl_graph(output: Path | None) -> None:
     importer = GhostCrawlGraphImporter()
     graph = importer.import_graph(output_dir=out_dir)
 
-    console.print(f"\n[green]Graph: {len(graph.nodes)} nodes, {len(graph.edges)} edges → {out_dir}[/green]")
+    console.print(
+        f"\n[green]Graph: {len(graph.nodes)} nodes, {len(graph.edges)} edges → {out_dir}[/green]"
+    )
 
 
 @import_group.command("ghostcrawl-flights")
@@ -1319,10 +1674,18 @@ def build_graph(input_dir: Path, output: Path | None, fmt: str) -> None:
 
 @cli.command()
 @click.argument("input_dir", type=click.Path(exists=True, file_okay=False, path_type=Path))
-@click.option("--graph-json", type=click.Path(path_type=Path), default=None,
-              help="Pre-built graph JSON. If omitted, builds from input_dir.")
-@click.option("--non-interactive", is_flag=True, default=False,
-              help="Print top entities and exit instead of launching REPL.")
+@click.option(
+    "--graph-json",
+    type=click.Path(path_type=Path),
+    default=None,
+    help="Pre-built graph JSON. If omitted, builds from input_dir.",
+)
+@click.option(
+    "--non-interactive",
+    is_flag=True,
+    default=False,
+    help="Print top entities and exit instead of launching REPL.",
+)
 def investigate(input_dir: Path, graph_json: Path | None, non_interactive: bool) -> None:
     """Launch interactive investigation engine on a knowledge graph.
 
@@ -1386,12 +1749,21 @@ def investigate(input_dir: Path, graph_json: Path | None, non_interactive: bool)
     if graph_json and graph_json.exists():
         graph_data = json.loads(graph_json.read_text(encoding="utf-8"))
         from epstein_pipeline.processors.knowledge_graph import GraphEdge, GraphNode
+
         graph = KnowledgeGraph(
-            nodes=[GraphNode(id=n["id"], label=n.get("label", n["id"]),
-                             type=n.get("type", "person")) for n in graph_data.get("nodes", [])],
-            edges=[GraphEdge(source=e["source"], target=e["target"],
-                             type=e.get("type", "co-occurrence"),
-                             weight=e.get("weight", 1.0)) for e in graph_data.get("links", [])],
+            nodes=[
+                GraphNode(id=n["id"], label=n.get("label", n["id"]), type=n.get("type", "person"))
+                for n in graph_data.get("nodes", [])
+            ],
+            edges=[
+                GraphEdge(
+                    source=e["source"],
+                    target=e["target"],
+                    type=e.get("type", "co-occurrence"),
+                    weight=e.get("weight", 1.0),
+                )
+                for e in graph_data.get("links", [])
+            ],
         )
         console.print(f"Loaded graph from {graph_json}")
     else:
@@ -1431,11 +1803,8 @@ def investigate(input_dir: Path, graph_json: Path | None, non_interactive: bool)
         table.add_column("Entity", style="cyan")
         table.add_column("Connections", justify="right")
         table.add_column("Type")
-        for entity_id, score in rankings:
-            node = engine._node_map.get(entity_id)
-            label = node.label if node else entity_id
-            ntype = node.type if node else "unknown"
-            table.add_row(label, str(int(score)), ntype)
+        for profile in rankings:
+            table.add_row(profile.label, str(profile.degree), profile.node_type)
         console.print(table)
         return
 
@@ -1543,16 +1912,31 @@ def sync_site(
 
 
 @cli.command("check-sanctions")
-@click.option("--output", "-o", type=click.Path(path_type=Path), default=None,
-              help="Output directory for results JSON (default: output/sanctions/)")
-@click.option("--api-key", envvar="EPSTEIN_OPENSANCTIONS_API_KEY", default=None,
-              help="OpenSanctions API key (or set EPSTEIN_OPENSANCTIONS_API_KEY)")
-@click.option("--registry", type=click.Path(exists=True, path_type=Path), default=None,
-              help="Path to persons-registry.json")
-@click.option("--threshold", type=float, default=0.5,
-              help="Minimum match score (0-1, default 0.5)")
-@click.option("--use-match/--use-search", default=True,
-              help="Use /match API (better quality) or /search (faster)")
+@click.option(
+    "--output",
+    "-o",
+    type=click.Path(path_type=Path),
+    default=None,
+    help="Output directory for results JSON (default: output/sanctions/)",
+)
+@click.option(
+    "--api-key",
+    envvar="EPSTEIN_OPENSANCTIONS_API_KEY",
+    default=None,
+    help="OpenSanctions API key (or set EPSTEIN_OPENSANCTIONS_API_KEY)",
+)
+@click.option(
+    "--registry",
+    type=click.Path(exists=True, path_type=Path),
+    default=None,
+    help="Path to persons-registry.json",
+)
+@click.option("--threshold", type=float, default=0.5, help="Minimum match score (0-1, default 0.5)")
+@click.option(
+    "--use-match/--use-search",
+    default=True,
+    help="Use /match API (better quality) or /search (faster)",
+)
 def check_sanctions(
     output: Path | None,
     api_key: str | None,
@@ -1579,7 +1963,7 @@ def check_sanctions(
         raise SystemExit(1)
 
     out_dir = output or settings.output_dir / "sanctions"
-    reg_path = registry or settings.persons_registry_path
+    reg_path = registry or settings.resolve_persons_registry_path()
 
     from epstein_pipeline.downloaders.opensanctions import download_opensanctions
 
@@ -1594,10 +1978,12 @@ def check_sanctions(
 
 @cli.command("import-sanctions")
 @click.argument("results_path", type=click.Path(exists=True, path_type=Path))
-@click.option("--database-url", envvar="EPSTEIN_NEON_DATABASE_URL", required=True,
-              help="Neon Postgres URL")
-@click.option("--min-score", type=float, default=0.4,
-              help="Minimum match score to import (default 0.4)")
+@click.option(
+    "--database-url", envvar="EPSTEIN_NEON_DATABASE_URL", required=True, help="Neon Postgres URL"
+)
+@click.option(
+    "--min-score", type=float, default=0.4, help="Minimum match score to import (default 0.4)"
+)
 def import_sanctions(results_path: Path, database_url: str, min_score: float) -> None:
     """Import OpenSanctions results into Neon Postgres.
 
@@ -1615,14 +2001,23 @@ def import_sanctions(results_path: Path, database_url: str, min_score: float) ->
 
 
 @cli.command("audit-persons")
-@click.option("--phases", "-p", default="all",
-              help="Comma-separated phases: dedup,wikidata,factcheck,coherence,score (default: all)")
+@click.option(
+    "--phases",
+    "-p",
+    default="all",
+    help="Comma-separated phases: dedup,wikidata,factcheck,coherence,score (default: all)",
+)
 @click.option("--person", help="Single person slug to audit")
 @click.option("--limit", "-l", type=int, default=None, help="Max persons to audit")
 @click.option("--resume/--no-resume", default=True, help="Resume from last checkpoint")
 @click.option("--dry-run", is_flag=True, help="Preview issues without storing to DB")
-@click.option("--output", "-o", type=click.Path(path_type=Path), default=None,
-              help="Write JSON report to file")
+@click.option(
+    "--output",
+    "-o",
+    type=click.Path(path_type=Path),
+    default=None,
+    help="Write JSON report to file",
+)
 @click.option("--min-severity", type=int, default=0, help="Only report issues >= this severity")
 def audit_persons(
     phases: str,
@@ -1668,6 +2063,7 @@ def audit_persons(
     person_ids = None
     if person:
         from epstein_pipeline.processors.person_auditor import PersonIntegrityAuditor
+
         auditor = PersonIntegrityAuditor(settings)
         persons = auditor._fetch_persons(None, None)
         matched = [p for p in persons if p["slug"] == person]
@@ -1678,7 +2074,7 @@ def audit_persons(
         auditor.close()
 
     console.print(BANNER)
-    console.print(f"[bold]Person Integrity Audit[/bold]")
+    console.print("[bold]Person Integrity Audit[/bold]")
     console.print(f"  Phases: {phases}")
     if person:
         console.print(f"  Person: {person}")
@@ -1692,14 +2088,16 @@ def audit_persons(
 
     auditor = PersonIntegrityAuditor(settings)
     try:
-        summary = asyncio.run(auditor.run(
-            phases=phase_list,
-            person_ids=person_ids,
-            limit=limit,
-            resume=resume,
-            dry_run=dry_run,
-            min_severity=min_severity,
-        ))
+        summary = asyncio.run(
+            auditor.run(
+                phases=phase_list,
+                person_ids=person_ids,
+                limit=limit,
+                resume=resume,
+                dry_run=dry_run,
+                min_severity=min_severity,
+            )
+        )
     finally:
         auditor.close()
 
@@ -1724,9 +2122,11 @@ def audit_persons(
         reverse=True,
     )
     if all_issues:
-        console.print(f"\n[bold]Top Issues:[/bold]")
+        console.print("\n[bold]Top Issues:[/bold]")
         for issue in all_issues[:20]:
-            sev_color = "red" if issue.severity >= 70 else "yellow" if issue.severity >= 40 else "white"
+            sev_color = (
+                "red" if issue.severity >= 70 else "yellow" if issue.severity >= 40 else "white"
+            )
             console.print(
                 f"  [{sev_color}]{issue.severity:3d}[/{sev_color}] "
                 f"[bold]{issue.person_name}[/bold] — {issue.title}"

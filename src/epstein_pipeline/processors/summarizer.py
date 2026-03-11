@@ -114,7 +114,7 @@ class Summarizer:
         response.raise_for_status()
         data = response.json()
         content = data.get("message", {}).get("content", "")
-        return content.strip()[:max_length]
+        return str(content).strip()[:max_length]
 
     def _summarize_openai(self, user_prompt: str, max_length: int) -> str:
         """Call the OpenAI chat completions API."""

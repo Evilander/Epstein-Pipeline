@@ -91,9 +91,11 @@ def import_opensanctions(
     results = data.get("results", [])
     metadata = data.get("metadata", {})
 
-    console.print(f"[bold]Importing OpenSanctions Results[/bold]")
+    console.print("[bold]Importing OpenSanctions Results[/bold]")
     console.print(f"Results file: [cyan]{results_path}[/cyan]")
-    console.print(f"Persons checked: [cyan]{metadata.get('total_persons_checked', len(results))}[/cyan]")
+    console.print(
+        f"Persons checked: [cyan]{metadata.get('total_persons_checked', len(results))}[/cyan]"
+    )
     console.print(f"Min import score: [cyan]{min_score}[/cyan]")
     console.print()
 
@@ -196,4 +198,4 @@ def import_opensanctions(
     table.add_row("Errors", str(errors))
     console.print(table)
 
-    console.print(f"\n[green]Import complete.[/green]")
+    console.print("\n[green]Import complete.[/green]")

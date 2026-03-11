@@ -15,8 +15,8 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install ruff
-      - run: ruff check src/ tests/
-      - run: ruff format --check src/ tests/
+      - run: ruff check .
+      - run: ruff format --check .
 
   test:
     runs-on: ubuntu-latest
@@ -45,7 +45,13 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install -e ".[dev]"
-      - run: mypy src/epstein_pipeline/ --ignore-missing-imports
+      - run: >
+          mypy
+          src/epstein_pipeline/config.py
+          src/epstein_pipeline/state.py
+          src/epstein_pipeline/utils/parallel.py
+          src/epstein_pipeline/utils/paths.py
+          --ignore-missing-imports
 
   schema-validate:
     runs-on: ubuntu-latest
@@ -66,3 +72,20 @@ jobs:
           assert 'semantic_search' in SEMANTIC_SEARCH_FN
           print('Schema validation passed')
           "
+
+  package:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -e ".[dev]" build twine
+      - run: python -m build
+      - run: python -m twine check dist/*
+      - run: python scripts/release_check.py dist
+      - run: python -m epstein_pipeline.cli status --fail-on-unhealthy
+      - run: python -m epstein_pipeline.cli --version

@@ -1,8 +1,11 @@
 """Tests for parallel processing utilities."""
 
+import logging
 import time
 
-from epstein_pipeline.utils.parallel import run_parallel
+import pytest
+
+from epstein_pipeline.utils.parallel import ParallelExecutionError, run_parallel
 
 
 def _slow_fn(x: int) -> int:
@@ -44,7 +47,21 @@ def test_run_parallel_with_processes():
 
 def test_run_parallel_handles_errors():
     items = list(range(6))
-    results = run_parallel(_failing_fn, items, max_workers=2, label="Errors")
-    # Only odd items should succeed (1, 3, 5)
-    assert len(results) == 3
-    assert set(results) == {2, 6, 10}
+    with pytest.raises(ParallelExecutionError) as exc_info:
+        run_parallel(_failing_fn, items, max_workers=2, label="Errors")
+
+    assert len(exc_info.value.failures) == 3
+    assert {item for item, _ in exc_info.value.failures} == {0, 2, 4}
+
+
+async def _async_fn(x: int) -> int:
+    return x * 2
+
+
+def test_run_parallel_rejects_awaitables(caplog):
+    items = [1, 2]
+    with caplog.at_level(logging.ERROR), pytest.raises(ParallelExecutionError) as exc_info:
+        run_parallel(_async_fn, items, max_workers=2, label="Awaitables")
+
+    assert len(exc_info.value.failures) == 2
+    assert "returned an awaitable" in caplog.text

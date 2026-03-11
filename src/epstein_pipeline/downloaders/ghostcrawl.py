@@ -131,8 +131,7 @@ class GhostCrawlDownloader:
             ds = DATASET_BY_KEY.get(subset)
             if ds is None:
                 self._console.print(
-                    f"[red]Unknown subset '{subset}'. "
-                    f"Valid: {', '.join(DATASET_BY_KEY)}[/red]"
+                    f"[red]Unknown subset '{subset}'. Valid: {', '.join(DATASET_BY_KEY)}[/red]"
                 )
                 return
             targets = [ds]
@@ -182,7 +181,9 @@ class GhostCrawlDownloader:
         """Print manual download instructions for large datasets."""
         hf_url = f"https://huggingface.co/datasets/{ds.repo_id}"
         self._console.print()
-        self._console.print(f"  [bold]This dataset is too large for automatic download ({ds.approx_size}).[/bold]")
+        self._console.print(
+            f"  [bold]This dataset is too large for automatic download ({ds.approx_size}).[/bold]"
+        )
         self._console.print()
         self._console.print("  [bold]Option 1 — huggingface-cli:[/bold]")
         self._console.print(

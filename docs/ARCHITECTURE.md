@@ -205,5 +205,5 @@ Multi-stage build for smaller images:
 
 ```bash
 docker compose run pipeline ocr ./pdfs/ --output ./output/
-docker compose run pipeline export neon --input-dir ./output/
+docker compose run pipeline export-neon ./output/
 ```

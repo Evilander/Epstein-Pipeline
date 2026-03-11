@@ -28,11 +28,11 @@ def extract_persons(ts_path: Path) -> list[dict]:
     # Match person objects: { id: "p-NNNN", slug: "...", name: "...", ... }
     # This regex captures the full object between braces
     person_pattern = re.compile(
-        r'\{\s*'
+        r"\{\s*"
         r'id:\s*"(p-\d+)".*?'
         r'slug:\s*"([^"]+)".*?'
         r'name:\s*"([^"]+)".*?'
-        r'(?:aliases:\s*\[(.*?)\].*?)?'
+        r"(?:aliases:\s*\[(.*?)\].*?)?"
         r'category:\s*"([^"]+)".*?'
         r'(?:shortBio:\s*["`]([^"`]*?)["`])?',
         re.DOTALL,
@@ -52,14 +52,16 @@ def extract_persons(ts_path: Path) -> list[dict]:
             alias_pattern = re.compile(r'"([^"]+)"')
             aliases = alias_pattern.findall(aliases_raw)
 
-        persons.append({
-            "id": person_id,
-            "slug": slug,
-            "name": name,
-            "aliases": aliases,
-            "category": category,
-            "shortBio": short_bio,
-        })
+        persons.append(
+            {
+                "id": person_id,
+                "slug": slug,
+                "name": name,
+                "aliases": aliases,
+                "category": category,
+                "shortBio": short_bio,
+            }
+        )
 
     return persons
 

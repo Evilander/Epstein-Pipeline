@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 import logging
 from collections.abc import Callable, Iterable
 from concurrent.futures import (
@@ -26,6 +27,30 @@ logger = logging.getLogger(__name__)
 
 T = TypeVar("T")
 R = TypeVar("R")
+
+
+class ParallelExecutionError(RuntimeError):
+    """Raised when one or more items fail during batch execution."""
+
+    def __init__(self, failures: list[tuple[object, Exception]]) -> None:
+        self.failures = failures
+        count = len(failures)
+        sample_items = ", ".join(repr(item) for item, _ in failures[:3])
+        suffix = " ..." if count > 3 else ""
+        super().__init__(
+            f"{count} item(s) failed during parallel execution: {sample_items}{suffix}"
+        )
+
+
+def _finalize_result(item: T, result: R) -> R:
+    """Reject awaitables so sync worker pools do not leak coroutines."""
+    if inspect.isawaitable(result):
+        if inspect.iscoroutine(result):
+            result.close()
+        raise TypeError(
+            f"run_parallel only supports synchronous callables; {item!r} returned an awaitable"
+        )
+    return result
 
 
 def run_parallel(
@@ -73,6 +98,7 @@ def run_parallel(
     executor_cls = ProcessPoolExecutor if use_processes else ThreadPoolExecutor
 
     results: list[R] = []
+    failures: list[tuple[object, Exception]] = []
 
     progress = Progress(
         SpinnerColumn(),
@@ -94,11 +120,15 @@ def run_parallel(
             for future in as_completed(future_to_item):
                 try:
                     result = future.result()
-                    results.append(result)
+                    results.append(_finalize_result(future_to_item[future], result))
                 except Exception as exc:
                     item = future_to_item[future]
+                    failures.append((item, exc))
                     logger.error("Failed processing %s: %s", item, exc)
                 progress.advance(task)
+
+    if failures:
+        raise ParallelExecutionError(failures)
 
     return results
 
@@ -110,6 +140,7 @@ def _run_sequential(
 ) -> list[R]:
     """Sequential fallback with progress bar."""
     results: list[R] = []
+    failures: list[tuple[object, Exception]] = []
 
     progress = Progress(
         SpinnerColumn(),
@@ -124,9 +155,13 @@ def _run_sequential(
         task = progress.add_task(label, total=len(items))
         for item in items:
             try:
-                results.append(fn(item))
+                results.append(_finalize_result(item, fn(item)))
             except Exception as exc:
+                failures.append((item, exc))
                 logger.error("Failed processing %s: %s", item, exc)
             progress.advance(task)
+
+    if failures:
+        raise ParallelExecutionError(failures)
 
     return results

@@ -153,3 +153,4 @@ def test_run_migration_sync_calls_asyncio_run():
         coro = mock_run.call_args[0][0]
         # The coroutine should be from run_migration
         assert coro is not None
+        coro.close()

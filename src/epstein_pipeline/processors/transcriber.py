@@ -9,6 +9,7 @@ from __future__ import annotations
 import logging
 import time
 from pathlib import Path
+from typing import Any
 
 from rich.console import Console
 
@@ -32,7 +33,7 @@ class MediaTranscriber:
         self.model_size = model_size
         self.device = device
         self.compute_type = compute_type
-        self._model = None
+        self._model: Any | None = None
 
     def _ensure_model(self):
         """Lazy-load the whisper model."""
@@ -70,9 +71,12 @@ class MediaTranscriber:
     def transcribe_file(self, path: Path) -> Transcript:
         """Transcribe a single audio/video file."""
         self._ensure_model()
+        model = self._model
+        if model is None:
+            raise RuntimeError("Whisper model failed to initialize")
 
         start = time.monotonic()
-        segments_iter, info = self._model.transcribe(
+        segments_iter, info = model.transcribe(
             str(path),
             beam_size=5,
             vad_filter=True,

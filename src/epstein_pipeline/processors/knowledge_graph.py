@@ -14,9 +14,10 @@ from __future__ import annotations
 
 import json
 import logging
-from collections import Counter, defaultdict
+from collections import defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any, cast
 from xml.etree.ElementTree import Element, ElementTree, SubElement
 
 from epstein_pipeline.config import Settings
@@ -99,7 +100,7 @@ class KnowledgeGraphBuilder:
     def __init__(self, settings: Settings | None = None) -> None:
         self.settings = settings
         self._nodes: dict[str, GraphNode] = {}
-        self._edge_counter: dict[tuple[str, str, str], float] = Counter()
+        self._edge_counter: defaultdict[tuple[str, str, str], float] = defaultdict(float)
         self._edge_attrs: dict[tuple[str, str, str], dict] = defaultdict(dict)
         self._extracted_relationships: list[ExtractedRelationship] = []
 
@@ -302,14 +303,14 @@ class KnowledgeGraphBuilder:
             try:
                 from openai import OpenAI
 
-                client = OpenAI()
-                response = client.chat.completions.create(
+                openai_client = OpenAI()
+                openai_response = openai_client.chat.completions.create(
                     model=model,
                     messages=[{"role": "user", "content": prompt}],
                     temperature=0.1,
                     max_tokens=2000,
                 )
-                return response.choices[0].message.content or ""
+                return openai_response.choices[0].message.content or ""
             except ImportError:
                 raise ImportError("openai package required. Install with: pip install openai")
 
@@ -317,13 +318,16 @@ class KnowledgeGraphBuilder:
             try:
                 import anthropic
 
-                client = anthropic.Anthropic()
-                response = client.messages.create(
+                anthropic_client = anthropic.Anthropic()
+                anthropic_message = anthropic_client.messages.create(
                     model=model,
                     max_tokens=2000,
                     messages=[{"role": "user", "content": prompt}],
                 )
-                return response.content[0].text if response.content else ""
+                if not anthropic_message.content:
+                    return ""
+                first_block = anthropic_message.content[0]
+                return getattr(first_block, "text", "")
             except ImportError:
                 raise ImportError("anthropic package required. Install with: pip install anthropic")
 
@@ -341,7 +345,10 @@ class KnowledgeGraphBuilder:
             if start == -1 or end == 0:
                 return []
 
-            data = json.loads(text[start:end])
+            raw_data = json.loads(text[start:end])
+            if not isinstance(raw_data, list):
+                return []
+            data = cast(list[dict[str, Any]], raw_data)
             relationships = []
 
             for item in data:

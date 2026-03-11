@@ -18,17 +18,16 @@ Usage:
 
 from __future__ import annotations
 
-import asyncio
-import hashlib
 import json
 import logging
 import time
 import uuid
 from datetime import datetime, timezone
+from typing import Any, cast
 
 import httpx
 from rapidfuzz import fuzz
-from rich.progress import Progress, TextColumn, BarColumn, MofNCompleteColumn
+from rich.progress import BarColumn, MofNCompleteColumn, Progress, TextColumn
 
 from epstein_pipeline.config import Settings
 from epstein_pipeline.models.audit import (
@@ -99,43 +98,47 @@ class PersonIntegrityAuditor:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
         self.state = ProcessingState()
-        self._neon = None
-        self._anthropic = None
-        self._voyage = None
-        self._cohere_client = None
-        self._http = None
+        self._neon: Any | None = None
+        self._anthropic: Any | None = None
+        self._voyage: Any | None = None
+        self._cohere_client: Any | None = None
+        self._http: httpx.Client | None = None
         self._total_tokens = 0
         self._total_cost_cents = 0
 
     # ── Lazy clients ────────────────────────────────────────────────────
 
-    def _get_neon(self):
+    def _get_neon(self) -> Any:
         if self._neon is None:
             import psycopg
+
             self._neon = psycopg.connect(self.settings.neon_database_url)
         return self._neon
 
-    def _get_anthropic(self):
+    def _get_anthropic(self) -> Any:
         if self._anthropic is None:
             import anthropic
+
             api_key = self.settings.auditor_anthropic_api_key
             if not api_key:
                 raise ValueError("EPSTEIN_AUDITOR_ANTHROPIC_API_KEY required")
             self._anthropic = anthropic.Anthropic(api_key=api_key)
         return self._anthropic
 
-    def _get_voyage(self):
+    def _get_voyage(self) -> Any:
         if self._voyage is None:
             import voyageai
+
             api_key = self.settings.auditor_voyage_api_key
             if not api_key:
                 raise ValueError("EPSTEIN_AUDITOR_VOYAGE_API_KEY required")
             self._voyage = voyageai.Client(api_key=api_key)
         return self._voyage
 
-    def _get_cohere(self):
+    def _get_cohere(self) -> Any | None:
         if self._cohere_client is None:
             import cohere
+
             api_key = self.settings.auditor_cohere_api_key
             if not api_key:
                 logger.warning("No Cohere API key — reranking disabled")
@@ -163,9 +166,13 @@ class PersonIntegrityAuditor:
         min_severity: int = 0,
     ) -> AuditRunSummary:
         """Run the audit pipeline."""
-        run_id = f"audit-{datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:6]}"
+        run_id = (
+            f"audit-{datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:6]}"
+        )
         phases = phases or list(self.ALL_PHASES)
-        logger.info("Audit run %s — phases: %s, limit: %s, resume: %s", run_id, phases, limit, resume)
+        logger.info(
+            "Audit run %s — phases: %s, limit: %s, resume: %s", run_id, phases, limit, resume
+        )
 
         summary = AuditRunSummary(
             run_id=run_id,
@@ -260,8 +267,11 @@ class PersonIntegrityAuditor:
         threshold = self.settings.auditor_name_fuzzy_threshold
         checked = set()
 
-        with Progress(TextColumn("[progress.description]{task.description}"),
-                      BarColumn(), MofNCompleteColumn()) as progress:
+        with Progress(
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            MofNCompleteColumn(),
+        ) as progress:
             task = progress.add_task("Dedup scan", total=len(persons))
 
             for i, p1 in enumerate(persons):
@@ -269,7 +279,7 @@ class PersonIntegrityAuditor:
                 if resume and self.state.is_processed(p1["id"], "audit_dedup"):
                     continue
 
-                for p2 in persons[i + 1:]:
+                for p2 in persons[i + 1 :]:
                     pair_key = tuple(sorted([p1["id"], p2["id"]]))
                     if pair_key in checked:
                         continue
@@ -280,11 +290,11 @@ class PersonIntegrityAuditor:
                     if name_sim < threshold:
                         # Also check aliases
                         alias_match = False
-                        for a1 in (p1.get("aliases") or []):
+                        for a1 in p1.get("aliases") or []:
                             if fuzz.ratio(a1.lower(), p2["name"].lower()) >= threshold:
                                 alias_match = True
                                 break
-                        for a2 in (p2.get("aliases") or []):
+                        for a2 in p2.get("aliases") or []:
                             if fuzz.ratio(p1["name"].lower(), a2.lower()) >= threshold:
                                 alias_match = True
                                 break
@@ -292,26 +302,33 @@ class PersonIntegrityAuditor:
                             continue
 
                     # Potential duplicate found
-                    issues.append(AuditIssue(
-                        person_id=p1["id"],
-                        person_name=p1["name"],
-                        issue_type=AuditIssueType.DUPLICATE_ENTRY,
-                        confidence=name_sim / 100.0,
-                        title=f"Possible duplicate: {p1['name']} ↔ {p2['name']}",
-                        details=f"Name similarity: {name_sim}%. IDs: {p1['id']} and {p2['id']}. "
-                                f"Categories: {p1.get('category', '?')} / {p2.get('category', '?')}.",
-                        evidence=[AuditEvidence(
-                            type="person",
-                            id=p2["id"],
-                            snippet=f"{p2['name']} ({p2.get('category', '?')}): {(p2.get('shortBio') or '')[:100]}",
-                            relevance=name_sim / 100.0,
-                        )],
-                        phase="dedup",
-                        dimensions=SeverityDimensions(
-                            impact=3, certainty=max(1, round(name_sim / 20)),
-                            scope=2, legal_risk=3, factual_gravity=4,
-                        ),
-                    ))
+                    issues.append(
+                        AuditIssue(
+                            person_id=p1["id"],
+                            person_name=p1["name"],
+                            issue_type=AuditIssueType.DUPLICATE_ENTRY,
+                            confidence=name_sim / 100.0,
+                            title=f"Possible duplicate: {p1['name']} ↔ {p2['name']}",
+                            details=f"Name similarity: {name_sim}%. IDs: {p1['id']} and {p2['id']}. "
+                            f"Categories: {p1.get('category', '?')} / {p2.get('category', '?')}.",
+                            evidence=[
+                                AuditEvidence(
+                                    type="person",
+                                    id=p2["id"],
+                                    snippet=f"{p2['name']} ({p2.get('category', '?')}): {(p2.get('shortBio') or '')[:100]}",
+                                    relevance=name_sim / 100.0,
+                                )
+                            ],
+                            phase="dedup",
+                            dimensions=SeverityDimensions(
+                                impact=3,
+                                certainty=max(1, round(name_sim / 20)),
+                                scope=2,
+                                legal_risk=3,
+                                factual_gravity=4,
+                            ),
+                        )
+                    )
 
                 self.state.mark_processed(p1["id"], "audit_dedup")
 
@@ -325,8 +342,11 @@ class PersonIntegrityAuditor:
         http = self._get_http()
         rate_limit = self.settings.auditor_wikidata_rate_limit
 
-        with Progress(TextColumn("[progress.description]{task.description}"),
-                      BarColumn(), MofNCompleteColumn()) as progress:
+        with Progress(
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            MofNCompleteColumn(),
+        ) as progress:
             task = progress.add_task("Wikidata check", total=len(persons))
 
             for person in persons:
@@ -357,47 +377,69 @@ class PersonIntegrityAuditor:
                                 if kw in occ_lower:
                                     wd_cats.add(cat)
                         if wd_cats and category not in wd_cats:
-                            issues.append(AuditIssue(
+                            issues.append(
+                                AuditIssue(
+                                    person_id=pid,
+                                    person_name=name,
+                                    issue_type=AuditIssueType.WRONG_CATEGORY,
+                                    confidence=wd.confidence,
+                                    title=f"Category mismatch: DB says '{category}', Wikidata says '{', '.join(wd.occupations)}'",
+                                    details=f"Wikidata QID: {wd.qid}. Our category: {category}. "
+                                    f"Wikidata occupations: {', '.join(wd.occupations)}. "
+                                    f"Suggested categories: {', '.join(wd_cats)}.",
+                                    evidence=[
+                                        AuditEvidence(
+                                            type="wikidata",
+                                            id=wd.qid,
+                                            snippet=f"Wikidata: {wd.label} — {wd.description or 'no description'}",
+                                            relevance=wd.confidence,
+                                        )
+                                    ],
+                                    wikidata_qid=wd.qid,
+                                    phase="wikidata",
+                                    dimensions=SeverityDimensions(
+                                        impact=3,
+                                        certainty=4,
+                                        scope=1,
+                                        legal_risk=1,
+                                        factual_gravity=2,
+                                    ),
+                                )
+                            )
+
+                    # Check if person is deceased but bio doesn't mention it
+                    if (
+                        wd.death_date
+                        and "deceased" not in bio.lower()
+                        and "died" not in bio.lower()
+                    ):
+                        issues.append(
+                            AuditIssue(
                                 person_id=pid,
                                 person_name=name,
-                                issue_type=AuditIssueType.WRONG_CATEGORY,
-                                confidence=wd.confidence,
-                                title=f"Category mismatch: DB says '{category}', Wikidata says '{', '.join(wd.occupations)}'",
-                                details=f"Wikidata QID: {wd.qid}. Our category: {category}. "
-                                        f"Wikidata occupations: {', '.join(wd.occupations)}. "
-                                        f"Suggested categories: {', '.join(wd_cats)}.",
-                                evidence=[AuditEvidence(
-                                    type="wikidata", id=wd.qid,
-                                    snippet=f"Wikidata: {wd.label} — {wd.description or 'no description'}",
-                                    relevance=wd.confidence,
-                                )],
+                                issue_type=AuditIssueType.STALE_DATA,
+                                confidence=wd.confidence * 0.8,
+                                title=f"Person deceased ({wd.death_date}) but bio doesn't note it",
+                                details=f"Wikidata shows death date: {wd.death_date}. Bio: {bio[:200]}",
+                                evidence=[
+                                    AuditEvidence(
+                                        type="wikidata",
+                                        id=wd.qid,
+                                        snippet=f"Death date: {wd.death_date}",
+                                        relevance=0.9,
+                                    )
+                                ],
                                 wikidata_qid=wd.qid,
                                 phase="wikidata",
                                 dimensions=SeverityDimensions(
-                                    impact=3, certainty=4, scope=1, legal_risk=1, factual_gravity=2,
+                                    impact=2,
+                                    certainty=4,
+                                    scope=1,
+                                    legal_risk=1,
+                                    factual_gravity=1,
                                 ),
-                            ))
-
-                    # Check if person is deceased but bio doesn't mention it
-                    if wd.death_date and "deceased" not in bio.lower() and "died" not in bio.lower():
-                        issues.append(AuditIssue(
-                            person_id=pid,
-                            person_name=name,
-                            issue_type=AuditIssueType.STALE_DATA,
-                            confidence=wd.confidence * 0.8,
-                            title=f"Person deceased ({wd.death_date}) but bio doesn't note it",
-                            details=f"Wikidata shows death date: {wd.death_date}. Bio: {bio[:200]}",
-                            evidence=[AuditEvidence(
-                                type="wikidata", id=wd.qid,
-                                snippet=f"Death date: {wd.death_date}",
-                                relevance=0.9,
-                            )],
-                            wikidata_qid=wd.qid,
-                            phase="wikidata",
-                            dimensions=SeverityDimensions(
-                                impact=2, certainty=4, scope=1, legal_risk=1, factual_gravity=1,
-                            ),
-                        ))
+                            )
+                        )
 
                     # Get Wikipedia summary for deeper comparison
                     try:
@@ -419,14 +461,17 @@ class PersonIntegrityAuditor:
         """Search Wikidata for a person and fetch structured claims."""
         # Search
         search_url = "https://www.wikidata.org/w/api.php"
-        resp = http.get(search_url, params={
-            "action": "wbsearchentities",
-            "search": name,
-            "language": "en",
-            "type": "item",
-            "limit": 5,
-            "format": "json",
-        })
+        resp = http.get(
+            search_url,
+            params={
+                "action": "wbsearchentities",
+                "search": name,
+                "language": "en",
+                "type": "item",
+                "limit": 5,
+                "format": "json",
+            },
+        )
         resp.raise_for_status()
         results = resp.json().get("search", [])
 
@@ -443,9 +488,23 @@ class PersonIntegrityAuditor:
             best_desc = r.get("description", "")
             # Prefer items described as human-related
             desc_lower = (best_desc or "").lower()
-            if any(kw in desc_lower for kw in ("politician", "business", "lawyer", "actor", "model",
-                                                 "socialite", "scientist", "academic", "prince",
-                                                 "investor", "financier", "journalist")):
+            if any(
+                kw in desc_lower
+                for kw in (
+                    "politician",
+                    "business",
+                    "lawyer",
+                    "actor",
+                    "model",
+                    "socialite",
+                    "scientist",
+                    "academic",
+                    "prince",
+                    "investor",
+                    "financier",
+                    "journalist",
+                )
+            ):
                 break
 
         if not qid:
@@ -453,13 +512,16 @@ class PersonIntegrityAuditor:
 
         # Fetch entity claims
         entity_url = "https://www.wikidata.org/w/api.php"
-        resp = http.get(entity_url, params={
-            "action": "wbgetentities",
-            "ids": qid,
-            "props": "claims|descriptions|labels",
-            "languages": "en",
-            "format": "json",
-        })
+        resp = http.get(
+            entity_url,
+            params={
+                "action": "wbgetentities",
+                "ids": qid,
+                "props": "claims|descriptions|labels",
+                "languages": "en",
+                "format": "json",
+            },
+        )
         resp.raise_for_status()
         entity = resp.json().get("entities", {}).get(qid, {})
         claims = entity.get("claims", {})
@@ -491,21 +553,21 @@ class PersonIntegrityAuditor:
             confidence=round(confidence, 2),
         )
 
-    def _extract_date(self, claims: list[dict]) -> str | None:
+    def _extract_date(self, claims: list[dict[str, Any]]) -> str | None:
         """Extract date from Wikidata time claims."""
         for c in claims:
             try:
-                time_val = c["mainsnak"]["datavalue"]["value"]["time"]
+                time_val = cast(str, c["mainsnak"]["datavalue"]["value"]["time"])
                 # Format: +1953-01-20T00:00:00Z -> 1953-01-20
                 return time_val.lstrip("+").split("T")[0]
             except (KeyError, IndexError):
                 continue
         return None
 
-    def _extract_labels(self, claims: list[dict], http: httpx.Client) -> list[str]:
+    def _extract_labels(self, claims: list[dict[str, Any]], http: httpx.Client) -> list[str]:
         """Extract human-readable labels from Wikidata entity claims."""
-        labels = []
-        qids = []
+        labels: list[str] = []
+        qids: list[str] = []
         for c in claims:
             try:
                 qid = c["mainsnak"]["datavalue"]["value"]["id"]
@@ -517,15 +579,19 @@ class PersonIntegrityAuditor:
             return labels
 
         # Batch fetch labels
-        resp = http.get("https://www.wikidata.org/w/api.php", params={
-            "action": "wbgetentities",
-            "ids": "|".join(qids[:10]),
-            "props": "labels",
-            "languages": "en",
-            "format": "json",
-        })
+        resp = http.get(
+            "https://www.wikidata.org/w/api.php",
+            params={
+                "action": "wbgetentities",
+                "ids": "|".join(qids[:10]),
+                "props": "labels",
+                "languages": "en",
+                "format": "json",
+            },
+        )
         resp.raise_for_status()
-        entities = resp.json().get("entities", {})
+        payload = resp.json()
+        entities = payload.get("entities", {}) if isinstance(payload, dict) else {}
         for qid in qids[:10]:
             label = entities.get(qid, {}).get("labels", {}).get("en", {}).get("value")
             if label:
@@ -540,12 +606,16 @@ class PersonIntegrityAuditor:
             resp = http.get(url)
             if resp.status_code == 200:
                 data = resp.json()
-                return data.get("extract", "")
+                if isinstance(data, dict):
+                    extract = data.get("extract", "")
+                    return str(extract) if extract else None
         except Exception:
             pass
         return None
 
-    def _compare_bios(self, pid: str, name: str, our_bio: str, wiki_summary: str, qid: str) -> list[AuditIssue]:
+    def _compare_bios(
+        self, pid: str, name: str, our_bio: str, wiki_summary: str, qid: str
+    ) -> list[AuditIssue]:
         """Use Claude to compare our bio against Wikipedia for contradictions."""
         issues = []
         try:
@@ -553,9 +623,10 @@ class PersonIntegrityAuditor:
             resp = client.messages.create(
                 model=self.settings.auditor_anthropic_model,
                 max_tokens=500,
-                messages=[{
-                    "role": "user",
-                    "content": f"""Compare these two descriptions of {name} and identify any factual contradictions.
+                messages=[
+                    {
+                        "role": "user",
+                        "content": f"""Compare these two descriptions of {name} and identify any factual contradictions.
 
 OUR DATABASE BIO: {our_bio[:500]}
 
@@ -566,8 +637,9 @@ If there are contradictions (wrong profession, wrong dates, wrong nationality, c
 
 If no contradictions found, output: {{"contradictions": []}}
 
-Output ONLY valid JSON, nothing else."""
-                }],
+Output ONLY valid JSON, nothing else.""",
+                    }
+                ],
             )
             self._track_cost(resp.usage, self.settings.auditor_anthropic_model)
 
@@ -575,25 +647,34 @@ Output ONLY valid JSON, nothing else."""
             data = json.loads(text)
             for c in data.get("contradictions", []):
                 sev_map = {"high": 4, "medium": 3, "low": 2}
-                issues.append(AuditIssue(
-                    person_id=pid,
-                    person_name=name,
-                    issue_type=AuditIssueType.EXTERNAL_CONTRADICTION,
-                    confidence=0.75,
-                    title=f"Bio contradicts Wikipedia: {c.get('our_claim', '')[:60]}",
-                    details=f"Our bio says: {c.get('our_claim', '')}. "
-                            f"Wikipedia says: {c.get('wikipedia_says', '')}.",
-                    evidence=[
-                        AuditEvidence(type="wikipedia", snippet=c.get("wikipedia_says", ""), relevance=0.8),
-                        AuditEvidence(type="wikidata", id=qid, snippet=f"QID: {qid}", relevance=0.9),
-                    ],
-                    wikidata_qid=qid,
-                    phase="wikidata",
-                    dimensions=SeverityDimensions(
-                        impact=4, certainty=sev_map.get(c.get("severity", "medium"), 3),
-                        scope=1, legal_risk=3, factual_gravity=sev_map.get(c.get("severity", "medium"), 3),
-                    ),
-                ))
+                issues.append(
+                    AuditIssue(
+                        person_id=pid,
+                        person_name=name,
+                        issue_type=AuditIssueType.EXTERNAL_CONTRADICTION,
+                        confidence=0.75,
+                        title=f"Bio contradicts Wikipedia: {c.get('our_claim', '')[:60]}",
+                        details=f"Our bio says: {c.get('our_claim', '')}. "
+                        f"Wikipedia says: {c.get('wikipedia_says', '')}.",
+                        evidence=[
+                            AuditEvidence(
+                                type="wikipedia", snippet=c.get("wikipedia_says", ""), relevance=0.8
+                            ),
+                            AuditEvidence(
+                                type="wikidata", id=qid, snippet=f"QID: {qid}", relevance=0.9
+                            ),
+                        ],
+                        wikidata_qid=qid,
+                        phase="wikidata",
+                        dimensions=SeverityDimensions(
+                            impact=4,
+                            certainty=sev_map.get(c.get("severity", "medium"), 3),
+                            scope=1,
+                            legal_risk=3,
+                            factual_gravity=sev_map.get(c.get("severity", "medium"), 3),
+                        ),
+                    )
+                )
         except Exception as e:
             logger.debug("Bio comparison error for %s: %s", name, e)
 
@@ -607,8 +688,11 @@ Output ONLY valid JSON, nothing else."""
         conn = self._get_neon()
         client = self._get_anthropic()
 
-        with Progress(TextColumn("[progress.description]{task.description}"),
-                      BarColumn(), MofNCompleteColumn()) as progress:
+        with Progress(
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            MofNCompleteColumn(),
+        ) as progress:
             task = progress.add_task("Fact-checking bios", total=len(persons))
 
             for person in persons:
@@ -631,7 +715,7 @@ Output ONLY valid JSON, nothing else."""
                     continue
 
                 # Step 2: For each claim, retrieve evidence and verify
-                for claim in claims[:self.settings.auditor_max_claims_per_person]:
+                for claim in claims[: self.settings.auditor_max_claims_per_person]:
                     if not claim.get("verifiable", True):
                         continue
 
@@ -641,51 +725,63 @@ Output ONLY valid JSON, nothing else."""
                     # Verify claim against evidence
                     verification = self._verify_claim(client, person["name"], claim, evidence)
                     if verification and verification.verdict == "CONTRADICTED":
-                        issues.append(AuditIssue(
-                            person_id=pid,
-                            person_name=person["name"],
-                            issue_type=AuditIssueType.BIO_CONTRADICTION,
-                            confidence=verification.confidence,
-                            title=f"Bio claim contradicted by documents: {claim['claim'][:60]}",
-                            details=f"Claim: {claim['claim']}. Verdict: CONTRADICTED. "
-                                    f"Reasoning: {verification.reasoning}",
-                            evidence=verification.evidence,
-                            phase="factcheck",
-                            dimensions=SeverityDimensions(
-                                impact=3, certainty=round(verification.confidence * 5),
-                                scope=1, legal_risk=3, factual_gravity=3,
-                            ),
-                        ))
-                    elif verification and verification.verdict == "UNVERIFIABLE":
-                        # Only flag as ungrounded if confidence is high
-                        if verification.confidence > 0.6:
-                            issues.append(AuditIssue(
+                        issues.append(
+                            AuditIssue(
                                 person_id=pid,
                                 person_name=person["name"],
-                                issue_type=AuditIssueType.UNGROUNDED_CLAIM,
-                                confidence=verification.confidence * 0.7,
-                                title=f"Ungrounded claim: {claim['claim'][:60]}",
-                                details=f"Claim: {claim['claim']}. No supporting evidence found in documents.",
+                                issue_type=AuditIssueType.BIO_CONTRADICTION,
+                                confidence=verification.confidence,
+                                title=f"Bio claim contradicted by documents: {claim['claim'][:60]}",
+                                details=f"Claim: {claim['claim']}. Verdict: CONTRADICTED. "
+                                f"Reasoning: {verification.reasoning}",
                                 evidence=verification.evidence,
                                 phase="factcheck",
                                 dimensions=SeverityDimensions(
-                                    impact=2, certainty=3, scope=1, legal_risk=2, factual_gravity=2,
+                                    impact=3,
+                                    certainty=round(verification.confidence * 5),
+                                    scope=1,
+                                    legal_risk=3,
+                                    factual_gravity=3,
                                 ),
-                            ))
+                            )
+                        )
+                    elif verification and verification.verdict == "UNVERIFIABLE":
+                        # Only flag as ungrounded if confidence is high
+                        if verification.confidence > 0.6:
+                            issues.append(
+                                AuditIssue(
+                                    person_id=pid,
+                                    person_name=person["name"],
+                                    issue_type=AuditIssueType.UNGROUNDED_CLAIM,
+                                    confidence=verification.confidence * 0.7,
+                                    title=f"Ungrounded claim: {claim['claim'][:60]}",
+                                    details=f"Claim: {claim['claim']}. No supporting evidence found in documents.",
+                                    evidence=verification.evidence,
+                                    phase="factcheck",
+                                    dimensions=SeverityDimensions(
+                                        impact=2,
+                                        certainty=3,
+                                        scope=1,
+                                        legal_risk=2,
+                                        factual_gravity=2,
+                                    ),
+                                )
+                            )
 
                 self.state.mark_processed(pid, "audit_factcheck")
 
         return issues
 
-    def _decompose_bio(self, client, name: str, bio: str) -> list[dict]:
+    def _decompose_bio(self, client, name: str, bio: str) -> list[dict[str, Any]]:
         """Use Claude to decompose a bio into atomic facts."""
         try:
             resp = client.messages.create(
                 model=self.settings.auditor_fast_model,
                 max_tokens=800,
-                messages=[{
-                    "role": "user",
-                    "content": f"""Extract atomic factual claims from this person's bio. Each claim should be independently verifiable.
+                messages=[
+                    {
+                        "role": "user",
+                        "content": f"""Extract atomic factual claims from this person's bio. Each claim should be independently verifiable.
 
 Person: {name}
 Bio: {bio[:600]}
@@ -693,11 +789,13 @@ Bio: {bio[:600]}
 Output JSON array:
 [{{"claim": "...", "type": "biographical|relational|temporal|legal|professional", "verifiable": true/false}}]
 
-Only include factual claims, not opinions or vague descriptions. Max 10 claims. Output ONLY valid JSON."""
-                }],
+Only include factual claims, not opinions or vague descriptions. Max 10 claims. Output ONLY valid JSON.""",
+                    }
+                ],
             )
             self._track_cost(resp.usage, self.settings.auditor_fast_model)
-            return json.loads(resp.content[0].text.strip())
+            payload = json.loads(resp.content[0].text.strip())
+            return cast(list[dict[str, Any]], payload) if isinstance(payload, list) else []
         except Exception as e:
             logger.debug("Bio decomposition error for %s: %s", name, e)
             return []
@@ -708,27 +806,33 @@ Only include factual claims, not opinions or vague descriptions. Max 10 claims. 
         try:
             # Search documents linked to this person
             with conn.cursor() as cur:
-                cur.execute("""
+                cur.execute(
+                    """
                     SELECT d.id, d.title, d.summary
                     FROM document_persons dp
                     JOIN documents d ON d.id = dp.doc_id
                     WHERE dp.person_id = %s
                     AND d.tsv @@ plainto_tsquery('english', %s)
                     LIMIT %s
-                """, (person_id, claim, self.settings.auditor_max_doc_chunks))
+                """,
+                    (person_id, claim, self.settings.auditor_max_doc_chunks),
+                )
 
                 for row in cur.fetchall():
-                    evidence.append(AuditEvidence(
-                        type="document",
-                        id=row[0],
-                        title=row[1],
-                        snippet=(row[2] or "")[:200],
-                        relevance=0.7,
-                    ))
+                    evidence.append(
+                        AuditEvidence(
+                            type="document",
+                            id=row[0],
+                            title=row[1],
+                            snippet=(row[2] or "")[:200],
+                            relevance=0.7,
+                        )
+                    )
 
                 # Also search OCR text if few results
                 if len(evidence) < 2:
-                    cur.execute("""
+                    cur.execute(
+                        """
                         SELECT ot."docId", substring(ot.text, 1, 200) as excerpt
                         FROM ocr_text ot
                         WHERE ot."docId" IN (
@@ -736,36 +840,44 @@ Only include factual claims, not opinions or vague descriptions. Max 10 claims. 
                         )
                         AND ot.tsv @@ plainto_tsquery('english', %s)
                         LIMIT %s
-                    """, (person_id, claim, 3))
+                    """,
+                        (person_id, claim, 3),
+                    )
 
                     for row in cur.fetchall():
-                        evidence.append(AuditEvidence(
-                            type="document",
-                            id=row[0],
-                            snippet=row[1] or "",
-                            relevance=0.6,
-                        ))
+                        evidence.append(
+                            AuditEvidence(
+                                type="document",
+                                id=row[0],
+                                snippet=row[1] or "",
+                                relevance=0.6,
+                            )
+                        )
 
         except Exception as e:
             logger.debug("Evidence retrieval error: %s", e)
 
         return evidence
 
-    def _verify_claim(self, client, name: str, claim: dict, evidence: list[AuditEvidence]) -> ClaimVerification | None:
+    def _verify_claim(
+        self, client, name: str, claim: dict, evidence: list[AuditEvidence]
+    ) -> ClaimVerification | None:
         """Use Claude to verify a claim against document evidence."""
-        evidence_text = "\n".join(
-            f"- [{e.id or '?'}] {e.snippet}" for e in evidence
-        ) or "No document evidence found."
+        evidence_text = (
+            "\n".join(f"- [{e.id or '?'}] {e.snippet}" for e in evidence)
+            or "No document evidence found."
+        )
 
         try:
             resp = client.messages.create(
                 model=self.settings.auditor_anthropic_model,
                 max_tokens=400,
-                messages=[{
-                    "role": "user",
-                    "content": f"""Verify this claim about {name} against the provided document evidence.
+                messages=[
+                    {
+                        "role": "user",
+                        "content": f"""Verify this claim about {name} against the provided document evidence.
 
-CLAIM: {claim['claim']}
+CLAIM: {claim["claim"]}
 
 DOCUMENT EVIDENCE:
 {evidence_text}
@@ -777,8 +889,9 @@ Classify the claim as:
 - UNVERIFIABLE: No relevant evidence found
 
 Output JSON: {{"verdict": "...", "confidence": 0.0-1.0, "reasoning": "brief explanation"}}
-Output ONLY valid JSON."""
-                }],
+Output ONLY valid JSON.""",
+                    }
+                ],
             )
             self._track_cost(resp.usage, self.settings.auditor_anthropic_model)
 
@@ -804,8 +917,11 @@ Output ONLY valid JSON."""
         client = self._get_anthropic()
 
         # Only check persons with significant document counts
-        with Progress(TextColumn("[progress.description]{task.description}"),
-                      BarColumn(), MofNCompleteColumn()) as progress:
+        with Progress(
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            MofNCompleteColumn(),
+        ) as progress:
             task = progress.add_task("Coherence check", total=len(persons))
 
             for person in persons:
@@ -817,7 +933,9 @@ Output ONLY valid JSON."""
 
                 # Get doc count
                 with conn.cursor() as cur:
-                    cur.execute("SELECT COUNT(*)::int FROM document_persons WHERE person_id = %s", (pid,))
+                    cur.execute(
+                        "SELECT COUNT(*)::int FROM document_persons WHERE person_id = %s", (pid,)
+                    )
                     doc_count = cur.fetchone()[0]
 
                 if doc_count < 10:
@@ -826,33 +944,35 @@ Output ONLY valid JSON."""
 
                 # Sample document titles
                 with conn.cursor() as cur:
-                    cur.execute("""
+                    cur.execute(
+                        """
                         SELECT d.title, d.summary, d.category, d.source
                         FROM document_persons dp
                         JOIN documents d ON d.id = dp.doc_id
                         WHERE dp.person_id = %s AND d.title IS NOT NULL
                         ORDER BY RANDOM()
                         LIMIT 15
-                    """, (pid,))
+                    """,
+                        (pid,),
+                    )
                     docs = cur.fetchall()
 
                 if len(docs) < 5:
                     self.state.mark_processed(pid, "audit_coherence")
                     continue
 
-                doc_list = "\n".join(
-                    f"- [{d[3]}] {d[0]}: {(d[1] or '')[:100]}" for d in docs
-                )
+                doc_list = "\n".join(f"- [{d[3]}] {d[0]}: {(d[1] or '')[:100]}" for d in docs)
 
                 # Ask Claude if this looks like one person
                 try:
                     resp = client.messages.create(
                         model=self.settings.auditor_anthropic_model,
                         max_tokens=400,
-                        messages=[{
-                            "role": "user",
-                            "content": f"""Review these documents linked to "{person['name']}" ({person.get('category', '?')}).
-Bio: {(person.get('shortBio') or '')[:200]}
+                        messages=[
+                            {
+                                "role": "user",
+                                "content": f"""Review these documents linked to "{person["name"]}" ({person.get("category", "?")}).
+Bio: {(person.get("shortBio") or "")[:200]}
 
 Documents (sample of {doc_count}):
 {doc_list}
@@ -860,34 +980,42 @@ Documents (sample of {doc_count}):
 Question: Do these documents consistently reference the SAME person, or is there evidence that this record might be conflating TWO OR MORE different people with the same or similar name?
 
 Output JSON: {{"coherent": true/false, "confidence": 0.0-1.0, "reasoning": "brief explanation", "possible_identities": ["identity1 description", "identity2 description"] if not coherent}}
-Output ONLY valid JSON."""
-                        }],
+Output ONLY valid JSON.""",
+                            }
+                        ],
                     )
                     self._track_cost(resp.usage, self.settings.auditor_anthropic_model)
 
                     data = json.loads(resp.content[0].text.strip())
                     if not data.get("coherent", True):
                         identities = data.get("possible_identities", [])
-                        issues.append(AuditIssue(
-                            person_id=pid,
-                            person_name=person["name"],
-                            issue_type=AuditIssueType.MERGED_IDENTITY,
-                            confidence=data.get("confidence", 0.6),
-                            title=f"Possible merged identity: {person['name']} may be {len(identities)} people",
-                            details=f"Reasoning: {data.get('reasoning', '')}. "
-                                    f"Possible identities: {'; '.join(identities)}. "
-                                    f"Based on sample of {len(docs)} of {doc_count} linked documents.",
-                            evidence=[AuditEvidence(
-                                type="co_occurrence",
-                                snippet=f"Sampled {len(docs)} of {doc_count} documents",
-                                relevance=0.8,
-                            )],
-                            phase="coherence",
-                            dimensions=SeverityDimensions(
-                                impact=4, certainty=round(data.get("confidence", 0.6) * 5),
-                                scope=4, legal_risk=4, factual_gravity=5,
-                            ),
-                        ))
+                        issues.append(
+                            AuditIssue(
+                                person_id=pid,
+                                person_name=person["name"],
+                                issue_type=AuditIssueType.MERGED_IDENTITY,
+                                confidence=data.get("confidence", 0.6),
+                                title=f"Possible merged identity: {person['name']} may be {len(identities)} people",
+                                details=f"Reasoning: {data.get('reasoning', '')}. "
+                                f"Possible identities: {'; '.join(identities)}. "
+                                f"Based on sample of {len(docs)} of {doc_count} linked documents.",
+                                evidence=[
+                                    AuditEvidence(
+                                        type="co_occurrence",
+                                        snippet=f"Sampled {len(docs)} of {doc_count} documents",
+                                        relevance=0.8,
+                                    )
+                                ],
+                                phase="coherence",
+                                dimensions=SeverityDimensions(
+                                    impact=4,
+                                    certainty=round(data.get("confidence", 0.6) * 5),
+                                    scope=4,
+                                    legal_risk=4,
+                                    factual_gravity=5,
+                                ),
+                            )
+                        )
 
                 except Exception as e:
                     logger.debug("Coherence check error for %s: %s", person["name"], e)
@@ -906,59 +1034,88 @@ Output ONLY valid JSON."""
 
         with conn.cursor() as cur:
             # Create audit run record
-            cur.execute("""
+            cur.execute(
+                """
                 INSERT INTO person_audit_runs (id, started_at, issues_found,
                     critical_count, high_count, medium_count, low_count)
                 VALUES (%s, NOW(), %s, %s, %s, %s, %s)
-            """, (
-                run_id,
-                len(issues),
-                sum(1 for i in issues if i.severity >= critical_threshold),
-                sum(1 for i in issues if high_threshold <= i.severity < critical_threshold),
-                sum(1 for i in issues if self.settings.auditor_severity_medium <= i.severity < high_threshold),
-                sum(1 for i in issues if i.severity < self.settings.auditor_severity_medium),
-            ))
+            """,
+                (
+                    run_id,
+                    len(issues),
+                    sum(1 for i in issues if i.severity >= critical_threshold),
+                    sum(1 for i in issues if high_threshold <= i.severity < critical_threshold),
+                    sum(
+                        1
+                        for i in issues
+                        if self.settings.auditor_severity_medium <= i.severity < high_threshold
+                    ),
+                    sum(1 for i in issues if i.severity < self.settings.auditor_severity_medium),
+                ),
+            )
 
             # Store each issue
             for issue in issues:
-                cur.execute("""
+                cur.execute(
+                    """
                     INSERT INTO person_audit_issues
                         (run_id, person_id, issue_type, severity, confidence,
                          title, details, evidence, wikidata_qid, phase, dimensions)
                     VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                """, (
-                    run_id, issue.person_id, issue.issue_type.value,
-                    issue.severity, issue.confidence,
-                    issue.title, issue.details,
-                    json.dumps([e.model_dump() for e in issue.evidence]),
-                    issue.wikidata_qid, issue.phase,
-                    json.dumps(issue.dimensions.model_dump()),
-                ))
+                """,
+                    (
+                        run_id,
+                        issue.person_id,
+                        issue.issue_type.value,
+                        issue.severity,
+                        issue.confidence,
+                        issue.title,
+                        issue.details,
+                        json.dumps([e.model_dump() for e in issue.evidence]),
+                        issue.wikidata_qid,
+                        issue.phase,
+                        json.dumps(issue.dimensions.model_dump()),
+                    ),
+                )
 
                 # Create ai_leads for critical and high issues
                 if issue.severity >= high_threshold:
                     priority = min(0.95, issue.severity / 100.0)
                     lead_type = "site_issue"
-                    cur.execute("""
+                    cur.execute(
+                        """
                         INSERT INTO ai_leads
                             (id, agent, lead_type, status, priority,
                              title, summary, evidence, entity_refs, created_at)
                         VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
-                    """, (
-                        f"audit-{uuid.uuid4().hex[:12]}",
-                        "auditor",
-                        lead_type,
-                        "pending",
-                        priority,
-                        issue.title,
-                        issue.details,
-                        json.dumps([e.model_dump() for e in issue.evidence]),
-                        json.dumps([{"type": "person", "id": issue.person_id, "name": issue.person_name}]),
-                    ))
+                    """,
+                        (
+                            f"audit-{uuid.uuid4().hex[:12]}",
+                            "auditor",
+                            lead_type,
+                            "pending",
+                            priority,
+                            issue.title,
+                            issue.details,
+                            json.dumps([e.model_dump() for e in issue.evidence]),
+                            json.dumps(
+                                [
+                                    {
+                                        "type": "person",
+                                        "id": issue.person_id,
+                                        "name": issue.person_name,
+                                    }
+                                ]
+                            ),
+                        ),
+                    )
 
         conn.commit()
-        logger.info("Stored %d issues, created %d leads",
-                     len(issues), sum(1 for i in issues if i.severity >= high_threshold))
+        logger.info(
+            "Stored %d issues, created %d leads",
+            len(issues),
+            sum(1 for i in issues if i.severity >= high_threshold),
+        )
 
     # ── Helpers ─────────────────────────────────────────────────────────
 
@@ -967,11 +1124,14 @@ Output ONLY valid JSON."""
         conn = self._get_neon()
         with conn.cursor() as cur:
             if person_ids:
-                cur.execute("""
+                cur.execute(
+                    """
                     SELECT id, slug, name, aliases, category, "shortBio", description,
                            "blackBookEntry", "imageUrl"
                     FROM persons WHERE id = ANY(%s) ORDER BY id
-                """, (person_ids,))
+                """,
+                    (person_ids,),
+                )
             else:
                 query = """
                     SELECT id, slug, name, aliases, category, "shortBio", description,
