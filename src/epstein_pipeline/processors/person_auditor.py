@@ -143,14 +143,17 @@ class PersonIntegrityAuditor:
             if not api_key:
                 logger.warning("No Cohere API key — reranking disabled")
                 return None
-            self._cohere_client = cohere.ClientV2(api_key=api_key)
+            client: Any = cohere.ClientV2(api_key=api_key)
+            self._cohere_client = client
         return self._cohere_client
 
     def _get_http(self) -> httpx.Client:
         if self._http is None:
             self._http = httpx.Client(
                 timeout=30.0,
-                headers={"User-Agent": "EpsteinPipeline/1.0 (https://github.com/evilander/Epstein-Pipeline)"},
+                headers={
+                    "User-Agent": "EpsteinPipeline/1.0 (https://github.com/evilander/Epstein-Pipeline)"
+                },
             )
         return self._http
 

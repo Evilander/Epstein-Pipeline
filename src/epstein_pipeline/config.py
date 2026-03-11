@@ -6,7 +6,7 @@ import importlib.util
 import os
 from enum import Enum
 from pathlib import Path
-from typing import Literal, TypedDict
+from typing import Literal, TypedDict, cast
 
 from pydantic_settings import BaseSettings
 
@@ -204,13 +204,16 @@ class Settings(BaseSettings):
             "sentence_transformers": _module_available("sentence_transformers"),
             "psycopg": _module_available("psycopg"),
         }
-        env_flags: EnvFlags = {
-            "neon_database_url": bool(self.neon_database_url),
-            "opensanctions_api_key": bool(self.opensanctions_api_key),
-            "auditor_anthropic_api_key": bool(self.auditor_anthropic_api_key),
-            "auditor_voyage_api_key": bool(self.auditor_voyage_api_key),
-            "auditor_cohere_api_key": bool(self.auditor_cohere_api_key),
-        }
+        env_flags = cast(
+            EnvFlags,
+            {
+                "neon_database_url": bool(self.neon_database_url),
+                "opensanctions_api_key": bool(self.opensanctions_api_key),
+                "auditor_anthropic_api_key": bool(self.auditor_anthropic_api_key),
+                "auditor_voyage_api_key": bool(self.auditor_voyage_api_key),
+                "auditor_cohere_api_key": bool(self.auditor_cohere_api_key),
+            },
+        )
 
         return {
             "paths": path_checks,
