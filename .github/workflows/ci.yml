@@ -64,12 +64,12 @@ jobs:
       - name: Validate Neon schema SQL is parseable
         run: |
           python -c "
-          from epstein_pipeline.exporters.neon_schema import (
-              SCHEMA_SQL, INDEX_SQL, SEMANTIC_SEARCH_FN
-          )
-          assert len(SCHEMA_SQL) > 100, 'Schema SQL too short'
-          assert len(INDEX_SQL) > 50, 'Index SQL too short'
-          assert 'semantic_search' in SEMANTIC_SEARCH_FN
+          from epstein_pipeline.exporters.neon_schema import MIGRATION_SQL, SCHEMA_VERSION
+          assert len(MIGRATION_SQL) > 1000, 'Migration SQL too short'
+          assert 'CREATE TABLE IF NOT EXISTS documents' in MIGRATION_SQL
+          assert 'CREATE TABLE IF NOT EXISTS persons' in MIGRATION_SQL
+          assert 'CREATE OR REPLACE FUNCTION semantic_search' in MIGRATION_SQL
+          assert f'VALUES ({SCHEMA_VERSION})' in MIGRATION_SQL
           print('Schema validation passed')
           "
 

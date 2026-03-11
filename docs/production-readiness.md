@@ -36,6 +36,7 @@ python scripts/release_check.py dist
 
 1. Run the release validation commands above.
 2. Commit the release branch state.
-3. Tag the release as `vX.Y.Z`.
-4. Push the branch and tag.
-5. Confirm the `CI` workflow and tag-triggered publish workflow complete successfully.
+3. Confirm the GitHub `pypi` environment has a `PYPI_API_TOKEN` secret for `epstein-pipeline`.
+4. Tag the release as `vX.Y.Z`.
+5. Push the branch and tag.
+6. Confirm the `CI` workflow and tag-triggered release workflow complete successfully.
