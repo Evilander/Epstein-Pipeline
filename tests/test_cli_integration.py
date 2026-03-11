@@ -73,7 +73,9 @@ def test_validate_directory_reports_mixed_results(
     assert "broken.json" in result.output
 
 
-def test_export_json_creates_document_array(tmp_path: Path, sample_documents, sample_persons) -> None:
+def test_export_json_creates_document_array(
+    tmp_path: Path, sample_documents, sample_persons
+) -> None:
     runner = CliRunner()
     registry_path = _write_registry(tmp_path / "runtime" / "persons-registry.json", sample_persons)
     input_dir = _write_processing_results(tmp_path / "processed-json", sample_documents)
