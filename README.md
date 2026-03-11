@@ -99,7 +99,7 @@ epstein-pipeline validate ./processed/
 
 Use `epstein-pipeline status --fail-on-unhealthy` in wrappers or CI when you want a fast stop signal before a long ingest or export run. Add `--check-database` when `EPSTEIN_NEON_DATABASE_URL` is configured and you want the smoke test to include a live Neon ping.
 
-Release operators should also read [`docs/production-readiness.md`](docs/production-readiness.md) and the concrete [`docs/release-v1.0.1.md`](docs/release-v1.0.1.md) handoff.
+Release operators should also read [`docs/production-readiness.md`](docs/production-readiness.md) and the concrete [`docs/release-v1.0.3.md`](docs/release-v1.0.3.md) handoff.
 
 ### Neon Postgres Setup
 
